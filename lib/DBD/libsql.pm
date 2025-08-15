@@ -40,15 +40,21 @@ sub driver {
 
 # Driver Handle
 package DBD::libsql::dr;
-$DBD::libsql::dr::imp_data_size = 0;
+use vars qw(@ISA $imp_data_size);
+@ISA = qw(DBI::dr);
+$imp_data_size = 0;
 
-sub imp_data_size { $DBD::libsql::dr::imp_data_size }
+sub imp_data_size { $imp_data_size }
+
+# Memory management package (required by DBI)
+package DBD::libsql::dr_mem;
 
 sub connect {
     my ($drh, $dsn, $user, $auth, $attr) = @_;
 
-    # Parse DSN
+    # Parse DSN to determine connection type
     my $database;
+    my $connection_type;
     my $dsn_remainder = $dsn;
     $dsn_remainder =~ s/^dbi:libsql://i;
 
@@ -58,18 +64,30 @@ sub connect {
         $database = $dsn_remainder;
     }
 
+    # Determine connection type based on database string
+    if ($database =~ /^libsql:\/\//) {
+        $connection_type = 'websocket';  # Remote libsql/Turso connection
+    } elsif ($database eq ':memory:') {
+        $connection_type = 'memory';     # In-memory database
+    } elsif ($database =~ /^https?:\/\//) {
+        $connection_type = 'http';       # HTTP API connection
+    } else {
+        $connection_type = 'file';       # Local file database
+    }
+
     # Create database handle
     my $dbh = DBI::_new_dbh($drh, {
         'Name' => $dsn,
-        'USER' => $user,
-        'CURRENT_USER' => $user,
-    });
+        'USER' => $user || '',
+        'CURRENT_USER' => $user || '',
+    }, $user);
 
     # Bless DBI handle into our package and initialize attributes
     bless $dbh, 'DBD::libsql::db';
     $dbh->{database} = $database;
-    $dbh->{user} = $user;
-    $dbh->{auth} = $auth;
+    $dbh->{connection_type} = $connection_type;
+    $dbh->{user} = $user || '';
+    $dbh->{auth} = $auth || '';
     $dbh->{attr} = $attr || {};
     $dbh->{_libsql_handle} = undef;
     $dbh->{_autocommit} = 1;
@@ -95,12 +113,15 @@ sub DESTROY {
 }
 
 # Database Handle
-# Database Handle
 package DBD::libsql::db;
-$DBD::libsql::db::imp_data_size = 0;
-our @ISA = qw(DBI::db);
+use vars qw(@ISA $imp_data_size);
+@ISA = qw(DBI::db);
+$imp_data_size = 0;
 
-sub imp_data_size { $DBD::libsql::db::imp_data_size }
+sub imp_data_size { $imp_data_size }
+
+# Memory management package (required by DBI)
+package DBD::libsql::db_mem;
 
 sub new {
     my ($class, $database, $user, $auth, $attr) = @_;
@@ -123,17 +144,25 @@ sub _init_libsql_connection {
     eval {
         my $ffi = FFI::Platypus->new( api => 1 );
         
-        # Try to load libsql library
-        # This will be commented out for now since libsql may not be installed
-        # $ffi->lib('libsql');
-        
-        # Define FFI functions here when libsql is available
-        # Example:
-        # $ffi->function('libsql_database_open' => ['string'] => 'opaque');
-        # $ffi->function('libsql_connection_prepare' => ['opaque', 'string'] => 'opaque');
-        
         $self->{_ffi} = $ffi;
         $self->{_libsql_available} = 0;  # Set to 1 when actual libsql is available
+        
+        # Initialize based on connection type
+        my $conn_type = $self->{connection_type} || 'file';
+        
+        if ($conn_type eq 'websocket') {
+            # WebSocket connection to remote libsql/Turso
+            $self->_init_websocket_connection();
+        } elsif ($conn_type eq 'file') {
+            # Local file database
+            $self->_init_file_connection();
+        } elsif ($conn_type eq 'memory') {
+            # In-memory database
+            $self->_init_memory_connection();
+        } elsif ($conn_type eq 'http') {
+            # HTTP API connection
+            $self->_init_http_connection();
+        }
     };
     
     if ($@) {
@@ -143,6 +172,36 @@ sub _init_libsql_connection {
     }
     
     # For now, always succeed even without libsql library
+    return 1;
+}
+
+sub _init_websocket_connection {
+    my $self = shift;
+    # WebSocket connection implementation for remote libsql/Turso
+    # This would use libsql's WebSocket protocol
+    warn "WebSocket connection to: " . $self->{database} if $ENV{DBD_LIBSQL_DEBUG};
+    return 1;
+}
+
+sub _init_file_connection {
+    my $self = shift;
+    # Local file database connection
+    # This would use libsql's local file mode (SQLite compatible)
+    warn "File connection to: " . $self->{database} if $ENV{DBD_LIBSQL_DEBUG};
+    return 1;
+}
+
+sub _init_memory_connection {
+    my $self = shift;
+    # In-memory database connection
+    warn "Memory database connection" if $ENV{DBD_LIBSQL_DEBUG};
+    return 1;
+}
+
+sub _init_http_connection {
+    my $self = shift;
+    # HTTP API connection
+    warn "HTTP connection to: " . $self->{database} if $ENV{DBD_LIBSQL_DEBUG};
     return 1;
 }
 
@@ -181,19 +240,37 @@ sub disconnect {
 
 sub FETCH {
     my ($dbh, $attr) = @_;
+    
+    # Handle our custom attributes
     if ($attr eq 'AutoCommit') {
         return $dbh->{_autocommit} // 1;
     }
-    return $dbh->SUPER::FETCH($attr);
+    
+    # Handle standard DBI attributes
+    if ($attr eq 'Name') {
+        return $dbh->{Name};
+    }
+    if ($attr eq 'USER') {
+        return $dbh->{USER};
+    }
+    
+    # For other attributes, return from our hash or undef
+    return exists $dbh->{$attr} ? $dbh->{$attr} : undef;
 }
 
 sub STORE {
     my ($dbh, $attr, $val) = @_;
+    
+    # Handle AutoCommit specially
     if ($attr eq 'AutoCommit') {
         $dbh->{_autocommit} = $val;
+        # TODO: Implement actual autocommit mode changes in libsql
         return $val;
     }
-    return $dbh->SUPER::STORE($attr, $val);
+    
+    # Store other attributes directly
+    $dbh->{$attr} = $val;
+    return $val;
 }
 
 sub set_autocommit {
@@ -230,10 +307,14 @@ sub DESTROY {
 
 # Statement Handle
 package DBD::libsql::st;
-our @ISA = qw(DBI::st);
-$DBD::libsql::st::imp_data_size = 0;
+use vars qw(@ISA $imp_data_size);
+@ISA = qw(DBI::st);
+$imp_data_size = 0;
 
-sub imp_data_size { $DBD::libsql::st::imp_data_size }
+sub imp_data_size { $imp_data_size }
+
+# Memory management package (required by DBI)
+package DBD::libsql::st_mem;
 
 sub new {
     my ($class, $dbh, $statement, $attr) = @_;
