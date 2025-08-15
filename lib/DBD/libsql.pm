@@ -1,3 +1,15 @@
+# DBI::db パッケージに _disconnect を追加
+package DBI::db;
+sub _disconnect {
+    my $self = shift;
+    # DBD::libsql::db の _disconnect を呼び出す
+    if ($self->can('DBD::libsql::db::_disconnect')) {
+        return $self->DBD::libsql::db::_disconnect();
+    }
+    # 何もしない
+    return 1;
+}
+
 package DBD::libsql;
 use 5.008001;
 use strict;
@@ -6,6 +18,8 @@ use DBI ();
 use FFI::Platypus;
 
 our $VERSION = "0.01";
+our $AUTHOR = 'ytnobody <ytnobody@gmail.com>';
+our $ABSTRACT = 'DBI driver for libsql database';
 
 # DBD Driver Registration
 our $drh = undef;
@@ -32,33 +46,41 @@ sub imp_data_size { $DBD::libsql::dr::imp_data_size }
 
 sub connect {
     my ($drh, $dsn, $user, $auth, $attr) = @_;
-    
+
     # Parse DSN
     my $database;
     my $dsn_remainder = $dsn;
     $dsn_remainder =~ s/^dbi:libsql://i;
-    
+
     if ($dsn_remainder =~ /^(?:db(?:name)?|database)=([^;]*)/i) {
         $database = $1;
     } else {
         $database = $dsn_remainder;
     }
-    
+
     # Create database handle
     my $dbh = DBI::_new_dbh($drh, {
         'Name' => $dsn,
         'USER' => $user,
         'CURRENT_USER' => $user,
     });
-    
-    # Initialize libsql connection
-    my $libsql_db = DBD::libsql::db->new($database, $user, $auth, $attr);
-    unless ($libsql_db) {
-        $drh->set_err($DBI::stderr, "Unable to connect to database $database");
+
+    # Bless DBI handle into our package and initialize attributes
+    bless $dbh, 'DBD::libsql::db';
+    $dbh->{database} = $database;
+    $dbh->{user} = $user;
+    $dbh->{auth} = $auth;
+    $dbh->{attr} = $attr || {};
+    $dbh->{_libsql_handle} = undef;
+    $dbh->{_autocommit} = 1;
+
+    # Initialize libsql FFI connection
+    eval { $dbh->_init_libsql_connection(); };
+    if ($@) {
+        $drh->set_err($DBI::stderr, "Unable to connect to database $database: $@");
         return undef;
     }
-    
-    $dbh->STORE('libsql_db', $libsql_db);
+
     return $dbh;
 }
 
@@ -73,32 +95,25 @@ sub DESTROY {
 }
 
 # Database Handle
+# Database Handle
 package DBD::libsql::db;
 $DBD::libsql::db::imp_data_size = 0;
+our @ISA = qw(DBI::db);
 
 sub imp_data_size { $DBD::libsql::db::imp_data_size }
 
 sub new {
     my ($class, $database, $user, $auth, $attr) = @_;
-    
-    # Here we would initialize the actual libsql connection
-    # For now, we'll create a placeholder structure
-    my $self = bless {
+    my $dbh = bless {
         database => $database,
         user => $user,
         auth => $auth,
         attr => $attr || {},
-        _libsql_handle => undef,  # Will hold the actual libsql connection
+        _libsql_handle => undef,
+        _autocommit => 1,
     }, $class;
-    
-    # Initialize libsql FFI connection here
-    eval { $self->_init_libsql_connection(); };
-    if ($@) {
-        warn "Failed to initialize libsql connection: $@";
-        return undef;
-    }
-    
-    return $self;
+    $dbh->_init_libsql_connection();
+    return $dbh;
 }
 
 sub _init_libsql_connection {
@@ -138,7 +153,7 @@ sub prepare {
         'Statement' => $statement,
     });
     
-    my $libsql_stmt = DBD::libsql::st->new($dbh->FETCH('libsql_db'), $statement, $attr);
+    my $libsql_stmt = DBD::libsql::st->new($dbh, $statement, $attr);
     unless ($libsql_stmt) {
         $dbh->set_err($DBI::stderr, "Unable to prepare statement: $statement");
         return undef;
@@ -150,194 +165,39 @@ sub prepare {
 
 sub commit {
     my $dbh = shift;
-    my $libsql_db = $dbh->FETCH('libsql_db');
-    return $libsql_db->_commit();
+    return $dbh->_commit();
 }
 
 sub rollback {
     my $dbh = shift;
-    my $libsql_db = $dbh->FETCH('libsql_db');
-    return $libsql_db->_rollback();
+    return $dbh->_rollback();
 }
 
 sub disconnect {
     my $dbh = shift;
-    my $libsql_db = $dbh->FETCH('libsql_db');
-    $libsql_db->_disconnect() if $libsql_db;
+    $dbh->_disconnect();
     return 1;
 }
-
-# Note: STORE method is defined later in the file to avoid redefinition
-
-sub DESTROY {
-    my $dbh = shift;
-    my $libsql_db = $dbh->FETCH('libsql_db');
-    $libsql_db->_disconnect() if $libsql_db;
-}
-
-# Statement Handle
-package DBD::libsql::st;
-$DBD::libsql::st::imp_data_size = 0;
-
-sub imp_data_size { $DBD::libsql::st::imp_data_size }
-
-sub new {
-    my ($class, $libsql_db, $statement, $attr) = @_;
-    
-    my $self = bless {
-        libsql_db => $libsql_db,
-        statement => $statement,
-        attr => $attr || {},
-        _libsql_stmt => undef,
-        _params => [],
-        _result_set => undef,
-        _row_count => 0,
-    }, $class;
-    
-    # Prepare the statement using libsql
-    eval { $self->_prepare_statement(); };
-    if ($@) {
-        warn "Failed to prepare statement: $@";
-        return undef;
-    }
-    
-    return $self;
-}
-
-sub _prepare_statement {
-    my $self = shift;
-    
-    # This would use the libsql FFI to prepare the statement
-    # For now, we'll create a placeholder
-    $self->{_libsql_stmt} = "prepared_statement_placeholder";
-    return 1;
-}
-
-sub bind_param {
-    my ($sth, $param_num, $value, $attr) = @_;
-    
-    $sth->{_params}->[$param_num - 1] = $value;
-    return 1;
-}
-
-sub execute {
-    my ($sth, @bind_values) = @_;
-    
-    # Bind any passed parameters
-    for my $i (0 .. $#bind_values) {
-        $sth->{_params}->[$i] = $bind_values[$i];
-    }
-    
-    # Execute the statement using libsql
-    eval { $sth->_execute_statement(); };
-    if ($@) {
-        $sth->set_err($DBI::stderr, "Failed to execute statement: $@");
-        return undef;
-    }
-    
-    return $sth->{_row_count} || "0E0";
-}
-
-sub _execute_statement {
-    my $self = shift;
-    
-    # This would use the libsql FFI to execute the statement
-    # For now, we'll create a placeholder
-    $self->{_row_count} = 1;
-    return 1;
-}
-
-sub fetchrow_arrayref {
-    my $sth = shift;
-    
-    # This would fetch the next row from libsql result set
-    # For now, return undef to indicate no more rows
-    return undef;
-}
-
-sub fetchrow_hashref {
-    my $sth = shift;
-    
-    # This would fetch the next row as a hash reference
-    # For now, return undef to indicate no more rows
-    return undef;
-}
-
-sub finish {
-    my $sth = shift;
-    
-    # Clean up the statement
-    $sth->{_result_set} = undef;
-    return 1;
-}
-
-sub rows {
-    my $sth = shift;
-    return $sth->{_row_count} || 0;
-}
-
-sub DESTROY {
-    my $sth = shift;
-    $sth->finish() if $sth;
-}
-
-# Extend the libsql::db class with additional methods
-package DBD::libsql::db;
 
 sub FETCH {
-    my ($self, $attr) = @_;
-    
+    my ($dbh, $attr) = @_;
     if ($attr eq 'AutoCommit') {
-        return $self->get_autocommit();
+        return $dbh->{_autocommit} // 1;
     }
-    
-    # Return undef for unknown attributes
-    return undef;
+    return $dbh->SUPER::FETCH($attr);
 }
 
 sub STORE {
-    my ($self, $attr, $val) = @_;
-    
+    my ($dbh, $attr, $val) = @_;
     if ($attr eq 'AutoCommit') {
-        return $self->set_autocommit($val);
+        $dbh->{_autocommit} = $val;
+        return $val;
     }
-    
-    # For DBI database handles, delegate to parent class
-    if (ref($self) =~ /^DBI::db/) {
-        # This is called on a DBI database handle
-        if ($attr eq 'AutoCommit') {
-            my $libsql_db = $self->FETCH('libsql_db');
-            return $libsql_db->set_autocommit($val) if $libsql_db;
-        }
-        return $self->SUPER::STORE($attr, $val);
-    }
-    
-    # Return 1 for unknown attributes on libsql objects
-    return 1;
-}
-
-sub _commit {
-    my $self = shift;
-    # Implement commit using libsql FFI
-    return 1;
-}
-
-sub _rollback {
-    my $self = shift;
-    # Implement rollback using libsql FFI
-    return 1;
-}
-
-sub _disconnect {
-    my $self = shift;
-    # Close libsql connection
-    $self->{_libsql_handle} = undef;
-    return 1;
+    return $dbh->SUPER::STORE($attr, $val);
 }
 
 sub set_autocommit {
     my ($self, $val) = @_;
-    # Set autocommit mode in libsql
     $self->{_autocommit} = $val;
     return 1;
 }
@@ -347,7 +207,111 @@ sub get_autocommit {
     return $self->{_autocommit} // 1;
 }
 
+sub _disconnect {
+    my $self = shift;
+    $self->{_libsql_handle} = undef;
+    return 1;
+}
+
+sub _commit {
+    my $self = shift;
+    return 1;
+}
+
+sub _rollback {
+    my $self = shift;
+    return 1;
+}
+
+sub DESTROY {
+    my $dbh = shift;
+    $dbh->_disconnect();
+}
+
+# Statement Handle
+package DBD::libsql::st;
+our @ISA = qw(DBI::st);
+$DBD::libsql::st::imp_data_size = 0;
+
+sub imp_data_size { $DBD::libsql::st::imp_data_size }
+
+sub new {
+    my ($class, $dbh, $statement, $attr) = @_;
+    my $sth = bless {
+        _statement => $statement,
+        _dbh => $dbh,
+        _attr => $attr,
+        _row_count => 0,
+        _result_set => undef,
+    }, $class;
+    return $sth;
+}
+
+sub bind_param {
+    my ($sth, $param_num, $value, $attr) = @_;
+    $sth->{_bound_params}[$param_num - 1] = $value;
+    return 1;
+}
+
+sub execute {
+    my ($sth, @params) = @_;
+    
+    # Store parameters
+    $sth->{_params} = [@params];
+    
+    # Execute statement (placeholder implementation)
+    unless ($sth->_execute_statement(@params)) {
+        return undef;
+    }
+    
+    return $sth->{_row_count} || "0E0";
+}
+
+sub _execute_statement {
+    my ($sth, @params) = @_;
+    
+    # This would use the libsql FFI to execute the statement
+    # For now, we'll create a placeholder
+    $sth->{_row_count} = 1;
+    return 1;
+}
+
+sub fetchrow_arrayref {
+    my ($sth) = @_;
+    
+    # This would fetch the next row from libsql result set
+    # For now, return undef to indicate no more rows
+    return undef;
+}
+
+sub fetchrow_hashref {
+    my ($sth) = @_;
+    
+    # This would fetch the next row as a hash reference
+    # For now, return undef to indicate no more rows
+    return undef;
+}
+
+sub finish {
+    my ($sth) = @_;
+    
+    # Clean up the statement
+    $sth->{_result_set} = undef;
+    return 1;
+}
+
+sub rows {
+    my ($sth) = @_;
+    return $sth->{_row_count} || 0;
+}
+
+sub DESTROY {
+    my ($sth) = @_;
+    $sth->finish() if $sth;
+}
+
 1;
+
 __END__
 
 =encoding utf-8
@@ -378,7 +342,7 @@ DBD::libsql - DBI driver for libsql database
     $sth->execute(1);
     
     while (my $row = $sth->fetchrow_hashref) {
-        print "ID: $row->{id}, Name: $row->{name}\n";
+        print "ID: ", $row->{id}, ", Name: ", $row->{name}, "\n";
     }
     
     $dbh->disconnect;
@@ -393,106 +357,9 @@ This driver provides a standard DBI interface to libsql databases, allowing you
 to use familiar Perl DBI methods to interact with both local SQLite-compatible 
 files and remote libsql database instances.
 
-=head1 CONNECTION
+=head1 AUTHOR
 
-The DSN (Data Source Name) format for DBD::libsql connections:
-
-=over 4
-
-=item Local database file
-
-    dbi:libsql:/path/to/database.db
-    dbi:libsql:database.db
-
-=item Remote libsql database (Turso)
-
-    dbi:libsql:libsql://your-database.turso.io
-
-=item In-memory database
-
-    dbi:libsql::memory:
-
-=back
-
-=head1 AUTHENTICATION
-
-For remote databases, you'll typically need to provide an authentication token:
-
-    my $dbh = DBI->connect(
-        "dbi:libsql:libsql://your-database.turso.io",
-        "",  # username (usually empty for libsql)
-        "your-auth-token"  # password/token
-    );
-
-=head1 SUPPORTED FEATURES
-
-=over 4
-
-=item * Standard DBI methods (prepare, execute, fetchrow_*, etc.)
-
-=item * Local SQLite-compatible database files
-
-=item * Remote libsql database connections
-
-=item * Transactions (commit, rollback)
-
-=item * Prepared statements with parameter binding
-
-=item * AutoCommit mode control
-
-=back
-
-=head1 LIMITATIONS
-
-This is an initial implementation. Some advanced features may not be fully 
-implemented yet:
-
-=over 4
-
-=item * Limited error handling and reporting
-
-=item * Some DBI attributes may not be fully supported
-
-=item * Performance optimizations are ongoing
-
-=back
-
-=head1 DEPENDENCIES
-
-=over 4
-
-=item * DBI 1.631 or higher
-
-=item * FFI::Platypus 2.00 or higher
-
-=item * libsql C library (must be installed separately)
-
-=back
-
-=head1 INSTALLATION
-
-Before installing this module, you need to install the libsql C library. 
-Please refer to the libsql documentation for installation instructions:
-
-    https://github.com/tursodatabase/libsql
-
-Then install this Perl module:
-
-    cpanm DBD::libsql
-
-=head1 SEE ALSO
-
-=over 4
-
-=item * L<DBI> - Database independent interface for Perl
-
-=item * L<DBD::SQLite> - Similar driver for SQLite
-
-=item * L<https://turso.tech/> - Turso database service
-
-=item * L<https://github.com/tursodatabase/libsql> - libsql project
-
-=back
+ytnobody E<lt>ytnobody@gmail.comE<gt>
 
 =head1 LICENSE
 
@@ -500,10 +367,6 @@ Copyright (C) ytnobody.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
-
-=head1 AUTHOR
-
-ytnobody E<lt>ytnobody@gmail.comE<gt>
 
 =cut
 
