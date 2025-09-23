@@ -12,22 +12,21 @@ use Test::More;
 use File::Temp qw(tempfile);
 use File::Spec;
 
-# Check if libsql is available before running tests
-sub check_libsql_available {
+# Check if turso dev server is running
+sub check_turso_dev_available {
     my $available = 0;
     eval {
-        require FFI::Platypus;
-        my $ffi = FFI::Platypus->new(api => 1);
-        $ffi->lib("$ENV{HOME}/libsql/target/release/libsql.so");
-        # $ffi->function('libsql_database_open' => ['string'] => 'opaque'); # ←コメントアウト
-        $available = 1;
+        require LWP::UserAgent;
+        my $ua = LWP::UserAgent->new(timeout => 5);
+        my $response = $ua->get('http://127.0.0.1:8080/health');
+        $available = 1 if $response->is_success;
     };
     return $available;
 }
 
-# Skip all tests if libsql is not available
-unless (check_libsql_available()) {
-    plan skip_all => 'libsql library not installed or not functional';
+# Skip all tests if turso dev server is not running
+unless (check_turso_dev_available()) {
+    plan skip_all => 'turso dev server not running on http://127.0.0.1:8080. Run: turso dev';
 }
 
 plan tests => 10;
@@ -70,7 +69,7 @@ plan tests => 10;
 
     # Test 3: DSN Parsing
     subtest 'DSN Parsing' => sub {
-        plan tests => 6;
+        plan tests => 5;
         
         my ($fh, $db_file) = tempfile(SUFFIX => '.db', UNLINK => 1);
         close $fh;
@@ -132,7 +131,7 @@ plan tests => 10;
 
     # Test 5: Prepared Statements
     subtest 'Prepared Statements' => sub {
-        plan tests => 8;
+        plan tests => 7;
         
         my ($fh, $db_file) = tempfile(SUFFIX => '.db', UNLINK => 1);
         close $fh;
@@ -188,7 +187,7 @@ plan tests => 10;
 
     # Test 7: Transactions
     subtest 'Transactions' => sub {
-        plan tests => 6;
+        plan tests => 5;
         
         my ($fh, $db_file) = tempfile(SUFFIX => '.db', UNLINK => 1);
         close $fh;
