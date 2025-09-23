@@ -77,6 +77,7 @@ sub connect {
         ua => $ua,
         json => JSON->new->utf8,
         base_url => $dsn,
+        baton => undef,  # Session token for maintaining transaction state
     };
     
     $dbh->STORE('libsql_dbh_id', $dbh_id);
@@ -110,7 +111,25 @@ sub STORE {
     my ($dbh, $attr, $val) = @_;
     
     if ($attr eq 'AutoCommit') {
-        return $dbh->{libsql_AutoCommit} = $val ? 1 : 0;
+        my $old_val = $dbh->{libsql_AutoCommit};
+        my $new_val = $val ? 1 : 0;
+        
+        # If switching from AutoCommit=1 to AutoCommit=0, send BEGIN
+        if ($old_val && !$new_val) {
+            eval { DBD::libsql::db::_execute_http($dbh, "BEGIN") };
+            if ($@) {
+                die "Failed to begin transaction: $@";
+            }
+        }
+        # If switching from AutoCommit=0 to AutoCommit=1, send COMMIT
+        elsif (!$old_val && $new_val) {
+            eval { DBD::libsql::db::_execute_http($dbh, "COMMIT") };
+            if ($@) {
+                die "Failed to commit transaction: $@";
+            }
+        }
+        
+        return $dbh->{libsql_AutoCommit} = $new_val;
     }
     
     if ($attr eq 'libsql_dbh_id') {
@@ -164,17 +183,52 @@ sub prepare {
 
 sub commit {
     my $dbh = shift;
-    return 1; # Always succeeds in AutoCommit mode
+    
+    # Send COMMIT command to libsql server
+    eval { $dbh->do("COMMIT") };
+    if ($@) {
+        return $dbh->set_err(1, "Commit failed: $@");
+    }
+    
+    # If AutoCommit is still 0, start a new transaction
+    if (!$dbh->FETCH('AutoCommit')) {
+        eval { $dbh->do("BEGIN") };
+        if ($@) {
+            return $dbh->set_err(1, "Failed to begin new transaction after commit: $@");
+        }
+    }
+    
+    return 1;
 }
 
 sub rollback {
     my $dbh = shift;
-    return 1; # Always succeeds in AutoCommit mode
+    
+    # Send ROLLBACK command to libsql server
+    eval { $dbh->do("ROLLBACK") };
+    if ($@) {
+        return $dbh->set_err(1, "Rollback failed: $@");
+    }
+    
+    # If AutoCommit is still 0, start a new transaction
+    if (!$dbh->FETCH('AutoCommit')) {
+        eval { $dbh->do("BEGIN") };
+        if ($@) {
+            return $dbh->set_err(1, "Failed to begin new transaction after rollback: $@");
+        }
+    }
+    
+    return 1;
 }
 
 sub begin_work {
     my $dbh = shift;
     if ($dbh->FETCH('AutoCommit')) {
+        # Send BEGIN command to libsql server
+        eval { $dbh->do("BEGIN") };
+        if ($@) {
+            return $dbh->set_err(1, "Begin transaction failed: $@");
+        }
         $dbh->STORE('AutoCommit', 0);
         return 1;
     }
@@ -209,6 +263,11 @@ sub _execute_http {
         ]
     };
     
+    # Add baton if available for session continuity
+    if ($client_data->{baton}) {
+        $pipeline_data->{baton} = $client_data->{baton};
+    }
+    
     my $request = HTTP::Request->new('POST', $client_data->{base_url} . '/v2/pipeline');
     $request->header('Content-Type' => 'application/json');
     $request->content($client_data->{json}->encode($pipeline_data));
@@ -220,6 +279,12 @@ sub _execute_http {
         if ($@ || !$result || !$result->{results}) {
             die "Invalid response from libsql server: $@";
         }
+        
+        # Update baton for session continuity
+        if ($result->{baton}) {
+            $client_data->{baton} = $result->{baton};
+        }
+        
         return $result->{results}->[0];
     } else {
         my $error_msg = "HTTP request failed: " . $response->status_line;
