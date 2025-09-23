@@ -285,7 +285,15 @@ sub _execute_http {
             $client_data->{baton} = $result->{baton};
         }
         
-        return $result->{results}->[0];
+        my $first_result = $result->{results}->[0];
+        
+        # Check if the result is an error
+        if ($first_result->{type} eq 'error') {
+            my $error = $first_result->{error};
+            die $error->{message} || "SQL execution error";
+        }
+        
+        return $first_result;
     } else {
         my $error_msg = "HTTP request failed: " . $response->status_line;
         if ($response->content) {
@@ -367,6 +375,13 @@ sub imp_data_size { 0 }
 
 sub bind_param {
     my ($sth, $param_num, $bind_value, $attr) = @_;
+    
+    # Initialize bind_params array if not exists
+    $sth->{libsql_bind_params} ||= [];
+    
+    # Store the bound parameter (param_num is 1-based)
+    $sth->{libsql_bind_params}->[$param_num - 1] = $bind_value;
+    
     return 1;
 }
 
@@ -374,6 +389,11 @@ sub execute {
     my ($sth, @bind_values) = @_;
     
     my $dbh = $sth->{Database};
+    
+    # Use inline parameters if provided, otherwise use bound parameters
+    unless (@bind_values) {
+        @bind_values = @{$sth->{libsql_bind_params} || []};
+    }
     
     # Use HTTP for all libsql connections
     my $statement = $sth->{Statement} || '';
