@@ -6,6 +6,7 @@ use DBI ();
 use LWP::UserAgent;
 use HTTP::Request;
 use JSON;
+use Data::Dumper;
 
 our $VERSION = '0.01';
 our $drh;
@@ -50,8 +51,15 @@ sub connect {
         die "unable to open database file: no such file or directory";
     }
     
-    # Detect HTTP connection
-    my $is_http = ($dsn =~ /^https?:\/\//);
+    # Memory databases are not supported in HTTP-only mode
+    if ($dsn eq ':memory:') {
+        die "Memory databases (:memory:) are not supported by DBD::libsql. Use a libsql server instead.";
+    }
+    
+    # Add http:// prefix if not present (libsql always uses HTTP)
+    unless ($dsn =~ /^https?:\/\//) {
+        $dsn = "http://$dsn";
+    }
     
     my $dbh = DBI::_new_dbh($drh, {
         'Name' => $dsn,
@@ -60,26 +68,23 @@ sub connect {
     $dbh->STORE('Active', 1);
     $dbh->STORE('AutoCommit', 1);
     
-    # Store connection type and setup HTTP client if needed
-    $dbh->{libsql_is_http} = $is_http;
-    if ($is_http) {
-        my $ua = LWP::UserAgent->new(timeout => 30);
-        
-        # Store HTTP client in global hash using database handle reference as key
-        my $dbh_id = "$dbh";  # Convert to string representation
-        $HTTP_CLIENTS{$dbh_id} = {
-            ua => $ua,
-            json => JSON->new->utf8,
-            base_url => $dsn,
-        };
-        
-        $dbh->{libsql_dbh_id} = $dbh_id;
-        
-        # Test connection
-        my $health_response = $ua->get("$dsn/health");
-        unless ($health_response->is_success) {
-            die "Cannot connect to libsql server at $dsn: " . $health_response->status_line;
-        }
+    # Setup HTTP client for libsql server communication (always required)
+    my $ua = LWP::UserAgent->new(timeout => 30);
+    
+    # Store HTTP client in global hash using database handle reference as key
+    my $dbh_id = "$dbh";  # Convert to string representation
+    $HTTP_CLIENTS{$dbh_id} = {
+        ua => $ua,
+        json => JSON->new->utf8,
+        base_url => $dsn,
+    };
+    
+    $dbh->STORE('libsql_dbh_id', $dbh_id);
+    
+    # Test connection to libsql server
+    my $health_response = $ua->get("$dsn/health");
+    unless ($health_response->is_success) {
+        die "Cannot connect to libsql server at $dsn: " . $health_response->status_line;
     }
     
     return $dbh;
@@ -108,6 +113,10 @@ sub STORE {
         return $dbh->{libsql_AutoCommit} = $val ? 1 : 0;
     }
     
+    if ($attr eq 'libsql_dbh_id') {
+        return $dbh->{libsql_dbh_id} = $val;
+    }
+    
     return $dbh->SUPER::STORE($attr, $val);
 }
 
@@ -118,6 +127,10 @@ sub FETCH {
         return $dbh->{libsql_AutoCommit};
     }
     
+    if ($attr eq 'libsql_dbh_id') {
+        return $dbh->{libsql_dbh_id};
+    }
+    
     return $dbh->SUPER::FETCH($attr);
 }
 
@@ -125,8 +138,9 @@ sub disconnect {
     my $dbh = shift;
     
     # Clean up HTTP client if exists
-    if ($dbh->{libsql_dbh_id}) {
-        delete $HTTP_CLIENTS{$dbh->{libsql_dbh_id}};
+    my $dbh_id = $dbh->FETCH('libsql_dbh_id');
+    if ($dbh_id) {
+        delete $HTTP_CLIENTS{$dbh_id};
     }
     
     $dbh->STORE('Active', 0);
@@ -170,11 +184,18 @@ sub begin_work {
 sub _execute_http {
     my ($dbh, $sql, @bind_values) = @_;
     
-    return undef unless $dbh->{libsql_is_http};
-    
     my $dbh_id = $dbh->{libsql_dbh_id};
     my $client_data = $HTTP_CLIENTS{$dbh_id};
     return undef unless $client_data;
+    
+    # Convert bind values to Hrana format
+    my @hrana_args = map {
+        if (!defined $_) {
+            { type => 'null' }
+        } else {
+            { type => 'text', value => "$_" }
+        }
+    } @bind_values;
     
     my $pipeline_data = {
         requests => [
@@ -182,7 +203,7 @@ sub _execute_http {
                 type => 'execute',
                 stmt => {
                     sql => $sql,
-                    args => \@bind_values
+                    args => \@hrana_args
                 }
             }
         ]
@@ -201,35 +222,23 @@ sub _execute_http {
         }
         return $result->{results}->[0];
     } else {
-        die "HTTP request failed: " . $response->status_line;
+        my $error_msg = "HTTP request failed: " . $response->status_line;
+        if ($response->content) {
+            $error_msg .= " - Response: " . $response->content;
+        }
+        die $error_msg;
     }
 }
 
 sub do {
     my ($dbh, $statement, $attr, @bind_values) = @_;
     
-    # For HTTP connections, use real server
-    if ($dbh->{libsql_is_http}) {
-        my $result = eval { $dbh->_execute_http($statement, @bind_values) };
-        if ($@) {
-            die $@;
-        }
-        return $result->{affected_row_count} || 0;
+    # Use HTTP for all libsql connections
+    my $result = eval { DBD::libsql::db::_execute_http($dbh, $statement, @bind_values) };
+    if ($@) {
+        die $@;
     }
-    
-    # Check for queries on non-existent table (for local testing)
-    if ($statement =~ /FROM\s+nonexistent_table/i) {
-        die "no such table: nonexistent_table";
-    }
-    
-    my $sth = $dbh->prepare($statement, $attr);
-    return undef unless $sth;
-    
-    my $result = $sth->execute(@bind_values);
-    my $rows = $sth->rows();
-    $sth->finish();
-    
-    return $result ? $rows : undef;
+    return $result->{response}->{result}->{affected_row_count} || 0;
 }
 
 sub selectall_arrayref {
@@ -301,62 +310,23 @@ sub execute {
     
     my $dbh = $sth->{Database};
     
-    # For HTTP connections, use real server
-    if ($dbh->{libsql_is_http}) {
-        my $statement = $sth->{Statement} || '';
-        my $result = eval { $dbh->_execute_http($statement, @bind_values) };
-        if ($@) {
-            die $@;
-        }
-        
-        # Store real results
-        if ($result->{rows}) {
-            $sth->{libsql_http_rows} = $result->{rows};
-            $sth->{libsql_fetch_index} = 0;
-            $sth->{libsql_rows} = scalar @{$result->{rows}};
-        } else {
-            $sth->{libsql_http_rows} = [];
-            $sth->{libsql_fetch_index} = 0;
-            $sth->{libsql_rows} = $result->{affected_row_count} || 0;
-        }
-        
-        return 1;
+    # Use HTTP for all libsql connections
+    my $statement = $sth->{Statement} || '';
+    my $result = eval { DBD::libsql::db::_execute_http($dbh, $statement, @bind_values) };
+    if ($@) {
+        die $@;
     }
     
-    # Store bind values
-    $sth->{libsql_bind_values} = \@bind_values if @bind_values;
-    
-    # Analyze SQL statement and return appropriate row count
-    my $statement = $sth->{Statement} || '';
-    if ($statement =~ /^\s*INSERT\s+/i) {
-        $sth->{libsql_rows} = 1;
-    } elsif ($statement =~ /^\s*UPDATE\s+/i) {
-        $sth->{libsql_rows} = 1;
-    } elsif ($statement =~ /^\s*DELETE\s+/i) {
-        $sth->{libsql_rows} = 1;
-    } elsif ($statement =~ /^\s*SELECT\s+/i) {
-        $sth->{libsql_rows} = -1; # Unknown for SELECT
-        # Set up mock data
-        if ($statement =~ /COUNT\(\*\)/i) {
-            # For COUNT queries
-            $sth->{libsql_mock_data} = [['3']];
-        } elsif ($statement =~ /test_fetch/i) {
-            # For test_fetch table
-            $sth->{libsql_mock_data} = [
-                ['1', 'Alice', '25'],
-                ['2', 'Bob', '30'],
-                ['3', 'Charlie', '35'],
-            ];
-        } else {
-            # Default mock data
-            $sth->{libsql_mock_data} = [
-                ['1', 'Test Name', '95.5'],
-                ['2', 'Another Test', '87.2'],
-            ];
-        }
+    # Store real results
+    my $execute_result = $result->{response}->{result};
+    if ($execute_result->{rows} && @{$execute_result->{rows}}) {
+        $sth->{libsql_http_rows} = $execute_result->{rows};
         $sth->{libsql_fetch_index} = 0;
+        $sth->{libsql_rows} = scalar @{$execute_result->{rows}};
     } else {
-        $sth->{libsql_rows} = 0;
+        $sth->{libsql_http_rows} = [];
+        $sth->{libsql_fetch_index} = 0;
+        $sth->{libsql_rows} = $execute_result->{affected_row_count} || 0;
     }
     
     return 1;
@@ -365,34 +335,20 @@ sub execute {
 sub fetchrow_arrayref {
     my $sth = shift;
     
-    my $dbh = $sth->{Database};
-    
-    # For HTTP connections, use real data
-    if ($dbh->{libsql_is_http}) {
-        my $rows = $sth->{libsql_http_rows} || [];
-        my $index = $sth->{libsql_fetch_index} || 0;
-        
-        if ($index < @$rows) {
-            $sth->{libsql_fetch_index} = $index + 1;
-            # Convert row values to array format
-            my $row = $rows->[$index];
-            return [values %$row] if ref $row eq 'HASH';
-            return $row if ref $row eq 'ARRAY';
-            return [$row];
-        }
-        return undef;
-    }
-    
-    # For local connections, use mock data
-    my $mock_data = $sth->{libsql_mock_data} || [];
+    # Use HTTP data for all libsql connections
+    my $rows = $sth->{libsql_http_rows} || [];
     my $index = $sth->{libsql_fetch_index} || 0;
     
-    if ($index < @$mock_data) {
+    if ($index < @$rows) {
         $sth->{libsql_fetch_index} = $index + 1;
-        return $mock_data->[$index];
+        # Convert Hrana protocol row to array of values
+        my $row = $rows->[$index];
+        if (ref $row eq 'ARRAY') {
+            return [map { $_->{value} } @$row];
+        }
+        return [$row];
     }
-    
-    return undef; # No results
+    return undef;
 }
 
 sub fetchrow_hashref {

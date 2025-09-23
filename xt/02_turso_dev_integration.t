@@ -60,7 +60,7 @@ unless (start_turso_dev_if_needed()) {
     plan skip_all => 'Could not start turso dev server';
 }
 
-plan tests => 8;
+plan tests => 7;
 
 # Test 1: Basic Hrana Protocol Communication
 subtest 'Hrana Protocol Direct Test' => sub {
@@ -259,26 +259,6 @@ subtest 'Error Handling Test' => sub {
     
     # Test connection error handling (this should succeed since we're connected)
     ok($dbh->ping(), 'Connection ping works');
-    
-    $dbh->disconnect();
-};
-
-# Test 8: Memory Database
-subtest 'Memory Database Test' => sub {
-    plan tests => 4;
-    
-    # Test in-memory database connection
-    my $dbh = DBI->connect("dbi:libsql::memory:", "", "");
-    ok($dbh, 'Connected to in-memory database');
-    
-    # Create table in memory
-    ok($dbh->do("CREATE TABLE mem_test (id INTEGER PRIMARY KEY, data TEXT)"), 'Created table in memory');
-    
-    # Insert and select data
-    ok($dbh->do("INSERT INTO mem_test (data) VALUES ('memory test')"), 'Inserted data into memory table');
-    
-    my ($data) = $dbh->selectrow_array("SELECT data FROM mem_test WHERE id = 1");
-    is($data, 'memory test', 'Retrieved data from memory table');
     
     $dbh->disconnect();
 };
