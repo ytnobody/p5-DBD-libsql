@@ -1,6 +1,6 @@
-# Developer Testing with turso dev
+# Extended Testing (xt/)
 
-This directory contains integration tests that require a running `turso dev` server.
+This directory contains extended tests that require external dependencies or specific runtime environments.
 
 ## Quick Start
 
@@ -33,15 +33,14 @@ This directory contains integration tests that require a running `turso dev` ser
    prove -Ilib xt/
    
    # Specific tests
-   prove -Ilib xt/03_smoke_test.t
-   prove -Ilib xt/02_turso_dev_integration.t
+   prove -Ilib xt/01_integration.t
+   prove -Ilib xt/02_smoke.t
    ```
 
 ## Test Files
 
-- **`01_with_libsql.t`** - Legacy comprehensive tests (updated for Hrana)
-- **`02_turso_dev_integration.t`** - Full integration test suite with auto-server startup
-- **`03_smoke_test.t`** - Quick smoke test for basic functionality
+- **`01_integration.t`** - Full integration test suite with libsql server
+- **`02_smoke.t`** - Quick smoke test for basic functionality
 
 ## Test Requirements
 
@@ -93,13 +92,13 @@ The integration tests cover:
 
 1. Make changes to `lib/DBD/libsql.pm` or `lib/DBD/libsql/Hrana.pm`
 2. Start `turso dev` if not running
-3. Run smoke test: `prove -Ilib xt/03_smoke_test.t`
+3. Run smoke test: `prove -Ilib xt/02_smoke.t`
 4. If smoke test passes, run full suite: `prove -Ilib xt/`
 5. Verify regular tests still pass: `prove -Ilib t/`
 
 ## Notes
 
 - Tests use temporary tables and clean up after themselves
-- The `02_turso_dev_integration.t` can auto-start turso dev server
+- The `01_integration.t` can auto-start turso dev server if needed
 - All tests handle graceful failures when server is unavailable
-- Memory database tests verify `:memory:` DSN handling
+- Tests verify HTTP-only libsql server communication
