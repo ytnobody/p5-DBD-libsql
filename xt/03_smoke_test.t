@@ -40,8 +40,8 @@ ok($dbh->do("INSERT OR REPLACE INTO smoke_test (id, message) VALUES (1, 'Hello f
 my $sth = $dbh->prepare("SELECT message FROM smoke_test WHERE id = ?");
 ok($sth->execute(1), 'Executed SELECT');
 
-my ($message) = $sth->fetchrow_array();
-is($message, 'Hello from DBD::libsql!', 'Retrieved correct data');
+my $row = $sth->fetchrow_arrayref();
+is($row->[0], 'Hello from DBD::libsql!', 'Retrieved correct data');
 
 # Cleanup
 $sth->finish();

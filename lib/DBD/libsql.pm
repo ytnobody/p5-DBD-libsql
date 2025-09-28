@@ -56,6 +56,11 @@ sub connect {
         die "Memory databases (:memory:) are not supported by DBD::libsql. Use a libsql server instead.";
     }
     
+    # Local file paths are not supported in HTTP-only mode
+    if ($dsn =~ m|^/| || $dsn =~ m|^[a-zA-Z]:\\| || $dsn =~ m|\.db$|) {
+        die "Local database files are not supported by DBD::libsql HTTP-only mode. Use a libsql server URL instead.";
+    }
+    
     # Add http:// prefix if not present (libsql always uses HTTP)
     unless ($dsn =~ /^https?:\/\//) {
         $dsn = "http://$dsn";
@@ -87,6 +92,31 @@ sub connect {
     unless ($health_response->is_success) {
         die "Cannot connect to libsql server at $dsn: " . $health_response->status_line;
     }
+    
+    # Initialize session baton with a simple query
+    eval {
+        my $init_request = HTTP::Request->new('POST', "$dsn/v2/pipeline");
+        $init_request->header('Content-Type' => 'application/json');
+        my $init_data = {
+            requests => [
+                {
+                    type => 'execute',
+                    stmt => {
+                        sql => 'SELECT 1',
+                        args => []
+                    }
+                }
+            ]
+        };
+        $init_request->content($HTTP_CLIENTS{$dbh_id}->{json}->encode($init_data));
+        my $init_response = $ua->request($init_request);
+        if ($init_response->is_success) {
+            my $init_result = eval { $HTTP_CLIENTS{$dbh_id}->{json}->decode($init_response->content) };
+            if ($init_result && $init_result->{baton}) {
+                $HTTP_CLIENTS{$dbh_id}->{baton} = $init_result->{baton};
+            }
+        }
+    };
     
     return $dbh;
 }
@@ -238,7 +268,7 @@ sub begin_work {
 sub _execute_http {
     my ($dbh, $sql, @bind_values) = @_;
     
-    my $dbh_id = $dbh->{libsql_dbh_id};
+    my $dbh_id = $dbh->FETCH('libsql_dbh_id');
     my $client_data = $HTTP_CLIENTS{$dbh_id};
     return undef unless $client_data;
     
@@ -311,7 +341,9 @@ sub do {
     if ($@) {
         die $@;
     }
-    return $result->{response}->{result}->{affected_row_count} || 0;
+    my $affected_rows = $result->{response}->{result}->{affected_row_count} || 0;
+    # Return "0E0" for zero rows to maintain truth value (DBI convention)
+    return $affected_rows == 0 ? "0E0" : $affected_rows;
 }
 
 sub selectall_arrayref {
