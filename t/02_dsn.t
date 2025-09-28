@@ -11,7 +11,7 @@ my @test_cases = (
         desc => "Localhost - Auto HTTP with port 8080"
     },
     {
-        dsn => "dbi:libsql:localhost?schema=http&port=3000",
+        dsn => "dbi:libsql:localhost?scheme=http&port=3000",
         expected_url => "http://localhost:3000",
         desc => "Localhost - Custom HTTP port"
     },
@@ -21,7 +21,7 @@ my @test_cases = (
         desc => "Turso - Auto HTTPS detection"
     },
     {
-        dsn => "dbi:libsql:example.com?schema=https&port=8443",
+        dsn => "dbi:libsql:example.com?scheme=https&port=8443",
         expected_url => "https://example.com:8443",
         desc => "Custom host - HTTPS with custom port"
     },
@@ -67,7 +67,7 @@ for my $test (@test_cases) {
     $dsn_remainder =~ s/^dbi:libsql://i;
     
     # Simulate _parse_dsn_to_url function logic (new format)
-    # Format: hostname or hostname?schema=https&port=443
+    # Format: hostname or hostname?scheme=https&port=443
     my ($host, $query_string) = split /\?/, $dsn_remainder, 2;
     
     # Smart defaults based on hostname
