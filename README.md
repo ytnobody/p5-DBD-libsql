@@ -48,17 +48,25 @@ parameter binding.
 
 # DSN FORMAT
 
-The Data Source Name (DSN) format for DBD::libsql is:
+The Data Source Name (DSN) format for DBD::libsql uses smart defaults for easy configuration:
 
     dbi:libsql:hostname
     dbi:libsql:hostname?schema=https&port=8443
 
-Examples:
+## Smart Defaults
 
-    # Turso Database (auto-detected HTTPS)
+The driver automatically detects the appropriate protocol and port based on the hostname:
+
+- **Turso databases** (.turso.io domains) - Uses HTTPS on port 443
+- **Localhost** - Uses HTTP on port 8080
+- **Other hosts** - Uses HTTPS on port 443
+
+## Examples
+
+    # Turso Database (auto-detected: HTTPS, port 443)
     dbi:libsql:hono-prisma-ytnobody.aws-ap-northeast-1.turso.io
     
-    # Local development server (auto-detected HTTP)
+    # Local development server (auto-detected: HTTP, port 8080) 
     dbi:libsql:localhost
     
     # Custom configuration
@@ -72,6 +80,77 @@ Standard DBI connection attributes are supported:
 - RaiseError - Enable/disable automatic error raising
 - AutoCommit - Enable/disable automatic transaction commit
 - PrintError - Enable/disable error printing
+
+# TURSO INTEGRATION
+
+DBD::libsql provides seamless integration with Turso, the managed libsql service.
+
+## Authentication
+
+For Turso databases, authentication can be provided via:
+
+- 1. Environment Variables (recommended)
+
+        export TURSO_DATABASE_URL="libsql://my-db.aws-us-east-1.turso.io"
+        export TURSO_DATABASE_TOKEN="your_auth_token"
+        
+        my $dbh = DBI->connect("dbi:libsql:my-db.aws-us-east-1.turso.io");
+
+- 2. Connection Attributes
+
+        my $dbh = DBI->connect(
+            "dbi:libsql:my-db.aws-us-east-1.turso.io",
+            "", "",
+            {
+                turso_token => "your_auth_token",
+                RaiseError => 1,
+            }
+        );
+
+## Getting Turso Credentials
+
+1\. Install the Turso CLI: [https://docs.turso.tech/reference/turso-cli](https://docs.turso.tech/reference/turso-cli)
+2\. Create a database: `turso db create my-database`
+3\. Get the URL: `turso db show --url my-database`
+4\. Create a token: `turso db tokens create my-database`
+
+# DEVELOPMENT AND TESTING
+
+## Running Tests
+
+Basic tests (no external dependencies):
+
+    prove -lv t/
+
+Extended tests (requires turso CLI):
+
+    # Install turso CLI first
+    curl -sSfL https://get.tur.so/install.sh | bash
+    
+    # Start local turso dev server
+    turso dev --port 8080 &
+    
+    # Run integration tests
+    prove -lv xt/01_integration.t xt/02_smoke.t
+
+Live Turso tests (optional):
+
+    export TURSO_DATABASE_URL="libsql://your-db.region.turso.io"
+    export TURSO_DATABASE_TOKEN="your_token"
+    prove -lv xt/03_turso_live.t
+
+## Test Coverage
+
+The test suite covers:
+
+- Hrana protocol communication
+- DBI connection management  
+- SQL operations (CREATE, INSERT, SELECT, UPDATE, DELETE)
+- Parameter binding and prepared statements
+- Transaction support (BEGIN, COMMIT, ROLLBACK)
+- Data fetching (fetchrow\_arrayref, fetchrow\_hashref, fetchrow\_array)
+- Error handling and graceful failures
+- Turso authentication and live database operations
 
 # LIMITATIONS
 
