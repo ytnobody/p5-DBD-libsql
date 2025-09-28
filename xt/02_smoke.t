@@ -25,7 +25,7 @@ BEGIN {
 plan tests => 5;
 
 # Test 1: Basic connection
-my $dbh = DBI->connect("dbi:libsql:http://127.0.0.1:8080", "", "");
+my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
 ok($dbh, 'Connected to turso dev server');
 
 # Test 2: Simple CREATE TABLE
