@@ -77,8 +77,12 @@ sub connect {
     # Setup HTTP client for libsql server communication (always required)
     my $ua = LWP::UserAgent->new(timeout => 30);
     
-    # Check for Turso authentication token
-    my $auth_token = $attr->{libsql_auth_token} || $ENV{TURSO_DATABASE_TOKEN};
+    # Check for Turso authentication token (multiple sources in priority order)
+    # 1. pass parameter (password field) - DBI standard approach
+    # 2. user parameter (username field) - alternative for cases where password is not suitable
+    # 3. connection attribute libsql_auth_token - DBD::libsql specific
+    # 4. environment variable TURSO_DATABASE_TOKEN - fallback for development
+    my $auth_token = $pass || $user || $attr->{libsql_auth_token} || $ENV{TURSO_DATABASE_TOKEN};
     
     # Store HTTP client in global hash using database handle reference as key
     my $dbh_id = "$dbh";  # Convert to string representation
@@ -604,10 +608,28 @@ DBD::libsql - DBI driver for libsql databases
 
     use DBI;
     
-    # Connect to a libsql server
+    # Connect to a local libsql server
     my $dbh = DBI->connect('dbi:libsql:localhost', '', '', {
         RaiseError => 1,
         AutoCommit => 1,
+    });
+    
+    # Connect to Turso with authentication token (recommended approach)
+    my $dbh = DBI->connect(
+        'dbi:libsql:my-db.aws-us-east-1.turso.io',
+        '',                    # username (unused)
+        'your_turso_token',    # password field used for auth token
+        {
+            RaiseError => 1,
+            AutoCommit => 1,
+        }
+    );
+    
+    # Alternative: Turso connection with connection attribute
+    my $dbh = DBI->connect('dbi:libsql:my-db.aws-us-east-1.turso.io', '', '', {
+        RaiseError => 1,
+        AutoCommit => 1,
+        libsql_auth_token => 'your_turso_token',
     });
     
     # Create a table
@@ -705,27 +727,45 @@ DBD::libsql provides seamless integration with Turso, the managed libsql service
 
 =head2 Authentication
 
-For Turso databases, authentication can be provided via:
+For Turso databases, authentication tokens can be provided via multiple methods (in priority order):
 
 =over 4
 
-=item 1. Environment Variables (recommended)
+=item 1. Password Parameter (recommended - DBI standard)
 
-    export TURSO_DATABASE_URL="libsql://my-db.aws-us-east-1.turso.io"
-    export TURSO_DATABASE_TOKEN="your_auth_token"
-    
-    my $dbh = DBI->connect("dbi:libsql:my-db.aws-us-east-1.turso.io");
+    my $dbh = DBI->connect(
+        "dbi:libsql:my-db.aws-us-east-1.turso.io",
+        "",                    # username (unused)
+        "your_auth_token",     # password field for auth token
+        { RaiseError => 1 }
+    );
 
-=item 2. Connection Attributes
+=item 2. Username Parameter (alternative)
+
+    my $dbh = DBI->connect(
+        "dbi:libsql:my-db.aws-us-east-1.turso.io",
+        "your_auth_token",     # username field for auth token
+        "",                    # password (unused)
+        { RaiseError => 1 }
+    );
+
+=item 3. Connection Attributes
 
     my $dbh = DBI->connect(
         "dbi:libsql:my-db.aws-us-east-1.turso.io",
         "", "",
         {
-            turso_token => "your_auth_token",
+            libsql_auth_token => "your_auth_token",
             RaiseError => 1,
         }
     );
+
+=item 4. Environment Variables (development/fallback)
+
+    export TURSO_DATABASE_URL="libsql://my-db.aws-us-east-1.turso.io"
+    export TURSO_DATABASE_TOKEN="your_auth_token"
+    
+    my $dbh = DBI->connect("dbi:libsql:my-db.aws-us-east-1.turso.io");
 
 =back
 
@@ -785,6 +825,208 @@ The test suite covers:
 
 =back
 
+=head1 METHODS
+
+This driver implements the standard DBI interface. All standard DBI methods are supported:
+
+=head2 Database Handle Methods
+
+=over 4
+
+=item B<prepare($statement)>
+
+Prepares an SQL statement for execution. Returns a statement handle.
+
+    my $sth = $dbh->prepare("SELECT * FROM users WHERE name = ?");
+
+=item B<do($statement, $attr, @bind_values)>
+
+Executes an SQL statement immediately. Returns the number of affected rows.
+
+    my $rows = $dbh->do("INSERT INTO users (name) VALUES (?)", undef, 'Alice');
+
+=item B<begin_work()>
+
+Starts a transaction by setting AutoCommit to false.
+
+    $dbh->begin_work();
+
+=item B<commit()>
+
+Commits the current transaction.
+
+    $dbh->commit();
+
+=item B<rollback()>
+
+Rolls back the current transaction.
+
+    $dbh->rollback();
+
+=item B<disconnect()>
+
+Disconnects from the database and cleans up resources.
+
+    $dbh->disconnect();
+
+=back
+
+=head2 Statement Handle Methods
+
+=over 4
+
+=item B<execute(@bind_values)>
+
+Executes the prepared statement with optional bind values.
+
+    $sth->execute('Alice');
+
+=item B<fetchrow_arrayref()>
+
+Fetches the next row as an array reference.
+
+    while (my $row = $sth->fetchrow_arrayref()) {
+        print "ID: $row->[0], Name: $row->[1]\n";
+    }
+
+=item B<fetchrow_hashref()>
+
+Fetches the next row as a hash reference.
+
+    while (my $row = $sth->fetchrow_hashref()) {
+        print "ID: $row->{id}, Name: $row->{name}\n";
+    }
+
+=item B<fetchrow_array()>
+
+Fetches the next row as an array.
+
+    while (my @row = $sth->fetchrow_array()) {
+        print "ID: $row[0], Name: $row[1]\n";
+    }
+
+=item B<finish()>
+
+Finishes the statement and frees associated resources.
+
+    $sth->finish();
+
+=item B<rows()>
+
+Returns the number of rows affected by the last execute.
+
+    my $affected = $sth->rows();
+
+=back
+
+=head1 TRANSACTION SUPPORT
+
+DBD::libsql fully supports transactions through the Hrana protocol:
+
+=head2 AutoCommit Mode
+
+By default, AutoCommit is enabled (1), meaning each SQL statement is automatically committed.
+
+    # AutoCommit enabled - each statement auto-commits
+    $dbh->do("INSERT INTO users (name) VALUES ('Alice')");
+
+=head2 Manual Transaction Control
+
+Disable AutoCommit to use manual transaction control:
+
+    $dbh->{AutoCommit} = 0;  # Start transaction mode
+    $dbh->do("INSERT INTO users (name) VALUES ('Alice')");
+    $dbh->do("INSERT INTO users (name) VALUES ('Bob')");
+    $dbh->commit();  # Commit both inserts
+
+Or use the convenience methods:
+
+    $dbh->begin_work();
+    $dbh->do("INSERT INTO users (name) VALUES ('Alice')");
+    $dbh->do("INSERT INTO users (name) VALUES ('Bob')");
+    
+    if ($error) {
+        $dbh->rollback();
+    } else {
+        $dbh->commit();
+    }
+
+=head1 ERROR HANDLING
+
+DBD::libsql provides comprehensive error handling:
+
+=head2 RaiseError Attribute
+
+Enable automatic error raising (recommended):
+
+    my $dbh = DBI->connect($dsn, '', '', {
+        RaiseError => 1,
+        AutoCommit => 1,
+    });
+
+=head2 Manual Error Checking
+
+    my $dbh = DBI->connect($dsn, '', '', { RaiseError => 0 });
+    
+    my $sth = $dbh->prepare("SELECT * FROM users");
+    unless ($sth) {
+        die "Prepare failed: " . $dbh->errstr;
+    }
+    
+    unless ($sth->execute()) {
+        die "Execute failed: " . $sth->errstr;
+    }
+
+=head2 Common Error Conditions
+
+=over 4
+
+=item * B<Connection errors> - Server unreachable, invalid URL, authentication failure
+
+=item * B<SQL syntax errors> - Invalid SQL statements
+
+=item * B<Constraint violations> - UNIQUE, NOT NULL, FOREIGN KEY violations
+
+=item * B<Transaction errors> - ROLLBACK due to conflicts or constraints
+
+=back
+
+=head1 PERFORMANCE CONSIDERATIONS
+
+=head2 Connection Reuse
+
+Reuse database connections when possible:
+
+    # Good: Single connection for multiple operations
+    my $dbh = DBI->connect($dsn, '', $token);
+    for my $item (@items) {
+        $dbh->do("INSERT INTO table VALUES (?)", undef, $item);
+    }
+    $dbh->disconnect();
+
+=head2 Prepared Statements
+
+Use prepared statements for repeated queries:
+
+    # Good: Prepare once, execute many times
+    my $sth = $dbh->prepare("INSERT INTO users (name) VALUES (?)");
+    for my $name (@names) {
+        $sth->execute($name);
+    }
+    $sth->finish();
+
+=head2 Batch Operations
+
+Group operations in transactions for better performance:
+
+    $dbh->begin_work();
+    my $sth = $dbh->prepare("INSERT INTO users (name) VALUES (?)");
+    for my $name (@names) {
+        $sth->execute($name);
+    }
+    $sth->finish();
+    $dbh->commit();
+
 =head1 LIMITATIONS
 
 =over 4
@@ -795,6 +1037,163 @@ The test suite covers:
 
 =item * In-memory databases are not supported
 
+=item * Large result sets may consume significant memory
+
+=item * No connection pooling (use at application level)
+
+=back
+
+=head1 EXAMPLES
+
+=head2 Basic Usage
+
+    use DBI;
+    
+    # Connect to local libsql server
+    my $dbh = DBI->connect('dbi:libsql:localhost', '', '', {
+        RaiseError => 1,
+        AutoCommit => 1,
+    });
+    
+    # Create a table
+    $dbh->do(q{
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    });
+    
+    # Insert data
+    $dbh->do("INSERT INTO users (name, email) VALUES (?, ?)", 
+             undef, 'Alice Johnson', 'alice@example.com');
+    
+    # Query data
+    my $sth = $dbh->prepare("SELECT * FROM users WHERE name LIKE ?");
+    $sth->execute('Alice%');
+    
+    while (my $row = $sth->fetchrow_hashref) {
+        printf "User: %s <%s> (ID: %d)\n", 
+               $row->{name}, $row->{email}, $row->{id};
+    }
+    
+    $sth->finish();
+    $dbh->disconnect();
+
+=head2 Turso Cloud Database
+
+    use DBI;
+    
+    # Connect to Turso with authentication
+    my $dbh = DBI->connect(
+        'dbi:libsql:my-app.aws-us-east-1.turso.io',
+        '',                    # username unused
+        $auth_token,           # password field for token
+        {
+            RaiseError => 1,
+            AutoCommit => 1,
+        }
+    );
+    
+    # Use the database normally
+    my $sth = $dbh->prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='table'");
+    $sth->execute();
+    my ($table_count) = $sth->fetchrow_array();
+    print "Database has $table_count tables\n";
+    
+    $dbh->disconnect();
+
+=head2 Transaction Example
+
+    use DBI;
+    
+    my $dbh = DBI->connect($dsn, '', $token, { RaiseError => 1 });
+    
+    eval {
+        $dbh->begin_work();
+        
+        # Insert user
+        $dbh->do("INSERT INTO users (name, email) VALUES (?, ?)",
+                 undef, 'Bob Smith', 'bob@example.com');
+        my $user_id = $dbh->last_insert_id('', '', 'users', 'id');
+        
+        # Insert user profile
+        $dbh->do("INSERT INTO profiles (user_id, bio) VALUES (?, ?)",
+                 undef, $user_id, 'Software developer');
+        
+        $dbh->commit();
+        print "User and profile created successfully\n";
+    };
+    
+    if ($@) {
+        warn "Transaction failed: $@";
+        $dbh->rollback();
+    }
+    
+    $dbh->disconnect();
+
+=head2 Prepared Statement Example
+
+    use DBI;
+    
+    my $dbh = DBI->connect($dsn, '', $token, { RaiseError => 1 });
+    
+    # Prepare statement once
+    my $sth = $dbh->prepare(q{
+        INSERT INTO log_entries (level, message, timestamp) 
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+    });
+    
+    # Execute multiple times with different data
+    my @log_data = (
+        ['INFO', 'Application started'],
+        ['DEBUG', 'Database connection established'],
+        ['WARN', 'Configuration file not found'],
+        ['ERROR', 'Failed to process request'],
+    );
+    
+    for my $entry (@log_data) {
+        $sth->execute(@$entry);
+    }
+    
+    $sth->finish();
+    print "Inserted " . scalar(@log_data) . " log entries\n";
+    
+    $dbh->disconnect();
+
+=head1 COMPATIBILITY
+
+=head2 libsql Server Versions
+
+This driver is compatible with:
+
+=over 4
+
+=item * libsql server v0.21.0 and later
+
+=item * Turso managed databases
+
+=item * sqld (libsql server daemon)
+
+=back
+
+=head2 Perl Versions
+
+Requires Perl 5.18 or later.
+
+=head2 DBI Compliance
+
+Implements DBI specification 1.631+ with the following notes:
+
+=over 4
+
+=item * All standard DBI methods are supported
+
+=item * Some DBD-specific attributes (like last_insert_id) may have limitations
+
+=item * Prepared statements use Hrana protocol parameter binding
+
 =back
 
 =head1 DEPENDENCIES
@@ -803,13 +1202,15 @@ This module requires the following Perl modules:
 
 =over 4
 
-=item * DBI
+=item * DBI (1.631 or later)
 
-=item * LWP::UserAgent
+=item * LWP::UserAgent (6.00 or later)
 
-=item * HTTP::Request
+=item * HTTP::Request (6.00 or later)
 
-=item * JSON
+=item * JSON (4.00 or later)
+
+=item * IO::Socket::SSL (2.00 or later) - for HTTPS connections
 
 =back
 
@@ -824,13 +1225,53 @@ it under the same terms as Perl itself.
 
 =head1 SEE ALSO
 
+=head2 Related Perl Modules
+
 =over 4
 
-=item * L<DBI>
+=item * L<DBI> - Database independent interface for Perl
 
-=item * L<DBD::SQLite>
+=item * L<DBD::SQLite> - SQLite driver for DBI (local file databases)
 
-=item * libsql documentation: L<https://docs.turso.tech/>
+=item * L<DBD::Pg> - PostgreSQL driver for DBI
+
+=item * L<DBD::mysql> - MySQL driver for DBI
+
+=back
+
+=head2 libsql and Turso Documentation
+
+=over 4
+
+=item * L<https://docs.turso.tech/> - Turso cloud database documentation
+
+=item * L<https://github.com/tursodatabase/libsql> - libsql GitHub repository
+
+=item * L<https://docs.turso.tech/reference/libsql-urls> - libsql URL format specification
+
+=item * L<https://docs.turso.tech/sdk/http/reference> - Hrana protocol documentation
+
+=back
+
+=head2 Development Tools
+
+=over 4
+
+=item * L<https://docs.turso.tech/reference/turso-cli> - Turso CLI for database management
+
+=item * L<https://github.com/tursodatabase/turso-cli> - Turso CLI source code
+
+=back
+
+=head2 Alternative Solutions
+
+=over 4
+
+=item * libsql official SDKs for other languages
+
+=item * Direct HTTP API access using LWP::UserAgent
+
+=item * SQLite with replication solutions
 
 =back
 

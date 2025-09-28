@@ -24,12 +24,11 @@ if ($turso_url =~ m|^libsql://([^/]+)|) {
 
 plan tests => 8;
 
-# Test 1: Connection with Turso credentials
+# Test 1: Connection with Turso credentials (using DBI standard password parameter)
 my $dsn = "dbi:libsql:$hostname";
-my $dbh = DBI->connect($dsn, '', '', {
+my $dbh = DBI->connect($dsn, '', $turso_token, {
     RaiseError => 1,
     AutoCommit => 1,
-    libsql_auth_token => $turso_token,
 });
 
 ok($dbh, 'Successfully connected to Turso database');
