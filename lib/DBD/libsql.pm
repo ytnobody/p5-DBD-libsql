@@ -2,6 +2,7 @@ package DBD::libsql;
 
 # ABSTRACT: DBI driver for libsql databases
 
+use 5.018;
 use strict;
 use warnings;
 use DBI ();

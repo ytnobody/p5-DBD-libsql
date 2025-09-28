@@ -1,4 +1,4 @@
-
+[![Actions Status](https://github.com/ytnobody/p5-DBD-libsql/actions/workflows/test.yml/badge.svg)](https://github.com/ytnobody/p5-DBD-libsql/actions)
 # NAME
 
 DBD::libsql - DBI driver for libsql databases

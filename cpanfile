@@ -1,4 +1,4 @@
-requires 'perl', '5.008001';
+requires 'perl', '5.018';
 requires 'DBI', '1.631';
 requires 'LWP::UserAgent', '6.00';
 requires 'HTTP::Request', '6.00';

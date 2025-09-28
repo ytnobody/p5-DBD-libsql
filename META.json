@@ -49,7 +49,7 @@
             "JSON" : "4.00",
             "LWP::UserAgent" : "6.00",
             "Protocol::WebSocket" : "0.20",
-            "perl" : "5.008001"
+            "perl" : "5.018"
          }
       },
       "test" : {
@@ -60,6 +60,17 @@
       }
    },
    "release_status" : "unstable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/ytnobody/p5-DBD-libsql/issues"
+      },
+      "homepage" : "https://github.com/ytnobody/p5-DBD-libsql",
+      "repository" : {
+         "type" : "git",
+         "url" : "https://github.com/ytnobody/p5-DBD-libsql.git",
+         "web" : "https://github.com/ytnobody/p5-DBD-libsql"
+      }
+   },
    "version" : "0.01",
    "x_serialization_backend" : "JSON::PP version 4.06",
    "x_static_install" : 1
