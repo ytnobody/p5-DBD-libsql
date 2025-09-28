@@ -77,12 +77,16 @@ sub connect {
     # Setup HTTP client for libsql server communication (always required)
     my $ua = LWP::UserAgent->new(timeout => 30);
     
+    # Check for Turso authentication token
+    my $auth_token = $attr->{libsql_auth_token} || $ENV{TURSO_DATABASE_TOKEN};
+    
     # Store HTTP client in global hash using database handle reference as key
     my $dbh_id = "$dbh";  # Convert to string representation
     $HTTP_CLIENTS{$dbh_id} = {
         ua => $ua,
         json => JSON->new->utf8,
         base_url => $server_url,
+        auth_token => $auth_token,
         baton => undef,  # Session token for maintaining transaction state
     };
     
@@ -98,6 +102,12 @@ sub connect {
     eval {
         my $init_request = HTTP::Request->new('POST', "$server_url/v2/pipeline");
         $init_request->header('Content-Type' => 'application/json');
+        
+        # Add Turso authentication header if token is available
+        if ($auth_token) {
+            $init_request->header('Authorization' => 'Bearer ' . $auth_token);
+        }
+        
         my $init_data = {
             requests => [
                 {
@@ -349,6 +359,12 @@ sub _execute_http {
     
     my $request = HTTP::Request->new('POST', $client_data->{base_url} . '/v2/pipeline');
     $request->header('Content-Type' => 'application/json');
+    
+    # Add Turso authentication header if token is available
+    if ($client_data->{auth_token}) {
+        $request->header('Authorization' => 'Bearer ' . $client_data->{auth_token});
+    }
+    
     $request->content($client_data->{json}->encode($pipeline_data));
     
     my $response = $client_data->{ua}->request($request);
@@ -510,8 +526,12 @@ sub fetchrow_arrayref {
         # Convert Hrana protocol row to array of values
         my $row = $rows->[$index];
         if (ref $row eq 'ARRAY') {
-            return [map { $_->{value} } @$row];
+            # Hrana protocol format: each element is {type => ..., value => ...}
+            return [map { 
+                ref $_ eq 'HASH' && exists $_->{value} ? $_->{value} : $_ 
+            } @$row];
         }
+        # Fallback for other formats
         return [$row];
     }
     return undef;
@@ -544,6 +564,14 @@ sub fetchrow_hashref {
             value => $row->[2],
         };
     }
+}
+
+sub fetchrow_array {
+    my $sth = shift;
+    
+    my $row = $sth->fetchrow_arrayref();
+    return undef unless $row;
+    return @$row;
 }
 
 sub finish {
@@ -626,17 +654,31 @@ parameter binding.
 
 =head1 DSN FORMAT
 
-The Data Source Name (DSN) format for DBD::libsql is:
+The Data Source Name (DSN) format for DBD::libsql uses smart defaults for easy configuration:
 
     dbi:libsql:hostname
     dbi:libsql:hostname?schema=https&port=8443
 
-Examples:
+=head2 Smart Defaults
 
-    # Turso Database (auto-detected HTTPS)
+The driver automatically detects the appropriate protocol and port based on the hostname:
+
+=over 4
+
+=item * B<Turso databases> (.turso.io domains) - Uses HTTPS on port 443
+
+=item * B<Localhost> - Uses HTTP on port 8080
+
+=item * B<Other hosts> - Uses HTTPS on port 443
+
+=back
+
+=head2 Examples
+
+    # Turso Database (auto-detected: HTTPS, port 443)
     dbi:libsql:hono-prisma-ytnobody.aws-ap-northeast-1.turso.io
     
-    # Local development server (auto-detected HTTP)
+    # Local development server (auto-detected: HTTP, port 8080) 
     dbi:libsql:localhost
     
     # Custom configuration
@@ -654,6 +696,92 @@ Standard DBI connection attributes are supported:
 =item * AutoCommit - Enable/disable automatic transaction commit
 
 =item * PrintError - Enable/disable error printing
+
+=back
+
+=head1 TURSO INTEGRATION
+
+DBD::libsql provides seamless integration with Turso, the managed libsql service.
+
+=head2 Authentication
+
+For Turso databases, authentication can be provided via:
+
+=over 4
+
+=item 1. Environment Variables (recommended)
+
+    export TURSO_DATABASE_URL="libsql://my-db.aws-us-east-1.turso.io"
+    export TURSO_DATABASE_TOKEN="your_auth_token"
+    
+    my $dbh = DBI->connect("dbi:libsql:my-db.aws-us-east-1.turso.io");
+
+=item 2. Connection Attributes
+
+    my $dbh = DBI->connect(
+        "dbi:libsql:my-db.aws-us-east-1.turso.io",
+        "", "",
+        {
+            turso_token => "your_auth_token",
+            RaiseError => 1,
+        }
+    );
+
+=back
+
+=head2 Getting Turso Credentials
+
+1. Install the Turso CLI: L<https://docs.turso.tech/reference/turso-cli>
+2. Create a database: C<turso db create my-database>
+3. Get the URL: C<turso db show --url my-database>
+4. Create a token: C<turso db tokens create my-database>
+
+=head1 DEVELOPMENT AND TESTING
+
+=head2 Running Tests
+
+Basic tests (no external dependencies):
+
+    prove -lv t/
+
+Extended tests (requires turso CLI):
+
+    # Install turso CLI first
+    curl -sSfL https://get.tur.so/install.sh | bash
+    
+    # Start local turso dev server
+    turso dev --port 8080 &
+    
+    # Run integration tests
+    prove -lv xt/01_integration.t xt/02_smoke.t
+
+Live Turso tests (optional):
+
+    export TURSO_DATABASE_URL="libsql://your-db.region.turso.io"
+    export TURSO_DATABASE_TOKEN="your_token"
+    prove -lv xt/03_turso_live.t
+
+=head2 Test Coverage
+
+The test suite covers:
+
+=over 4
+
+=item * Hrana protocol communication
+
+=item * DBI connection management  
+
+=item * SQL operations (CREATE, INSERT, SELECT, UPDATE, DELETE)
+
+=item * Parameter binding and prepared statements
+
+=item * Transaction support (BEGIN, COMMIT, ROLLBACK)
+
+=item * Data fetching (fetchrow_arrayref, fetchrow_hashref, fetchrow_array)
+
+=item * Error handling and graceful failures
+
+=item * Turso authentication and live database operations
 
 =back
 
