@@ -141,10 +141,10 @@ sub _parse_dsn_to_url {
     
     # Reject HTTP URL format (use new format instead)
     if ($dsn =~ /^https?:\/\//) {
-        die "HTTP URL format in DSN is not supported. Use hostname or hostname?schema=https&port=443 format instead.";
+        die "HTTP URL format in DSN is not supported. Use hostname or hostname?scheme=https&port=443 format instead.";
     }
     
-    # Parse new format: hostname or hostname?schema=https&port=443
+    # Parse new format: hostname or hostname?scheme=https&port=443
     my ($host, $query_string) = split /\?/, $dsn, 2;
     
     # Smart defaults based on hostname
@@ -169,7 +169,7 @@ sub _parse_dsn_to_url {
             ($k, $v // '') 
         } split '&', $query_string;
         
-        $scheme = $params{schema} if defined $params{schema} && $params{schema} ne '';
+        $scheme = $params{scheme} if defined $params{scheme} && $params{scheme} ne '';
         $port = $params{port} if defined $params{port} && $params{port} ne '';
     }
     
@@ -679,7 +679,7 @@ parameter binding.
 The Data Source Name (DSN) format for DBD::libsql uses smart defaults for easy configuration:
 
     dbi:libsql:hostname
-    dbi:libsql:hostname?schema=https&port=8443
+    dbi:libsql:hostname?scheme=https&port=8443
 
 =head2 Smart Defaults
 
@@ -704,8 +704,8 @@ The driver automatically detects the appropriate protocol and port based on the 
     dbi:libsql:localhost
     
     # Custom configuration
-    dbi:libsql:localhost?schema=http&port=3000
-    dbi:libsql:api.example.com?schema=https&port=8443
+    dbi:libsql:localhost?scheme=http&port=3000
+    dbi:libsql:api.example.com?scheme=https&port=8443
 
 =head1 CONNECTION ATTRIBUTES
 
