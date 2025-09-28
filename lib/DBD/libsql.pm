@@ -1,5 +1,7 @@
 package DBD::libsql;
 
+# ABSTRACT: DBI driver for libsql databases
+
 use strict;
 use warnings;
 use DBI ();
@@ -269,7 +271,7 @@ sub _execute_http {
     my ($dbh, $sql, @bind_values) = @_;
     
     my $dbh_id = $dbh->FETCH('libsql_dbh_id');
-    my $client_data = $HTTP_CLIENTS{$dbh_id};
+    my $client_data = defined($dbh_id) ? $HTTP_CLIENTS{$dbh_id} : undef;
     return undef unless $client_data;
     
     # Convert bind values to Hrana format
@@ -516,3 +518,140 @@ sub DESTROY {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+DBD::libsql - DBI driver for libsql databases
+
+=head1 SYNOPSIS
+
+    use DBI;
+    
+    # Connect to a libsql server
+    my $dbh = DBI->connect('dbi:libsql:http://localhost:8080', '', '', {
+        RaiseError => 1,
+        AutoCommit => 1,
+    });
+    
+    # Create a table
+    $dbh->do("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    
+    # Insert data
+    $dbh->do("INSERT INTO users (name) VALUES (?)", undef, 'Alice');
+    
+    # Query data
+    my $sth = $dbh->prepare("SELECT * FROM users WHERE name = ?");
+    $sth->execute('Alice');
+    while (my $row = $sth->fetchrow_hashref) {
+        print "ID: $row->{id}, Name: $row->{name}\n";
+    }
+    
+    $dbh->disconnect;
+
+=head1 DESCRIPTION
+
+DBD::libsql is a DBI driver that provides access to libsql databases via HTTP.
+libsql is a fork of SQLite that supports server-side deployment and remote access.
+
+This driver communicates with libsql servers using the Hrana protocol over HTTP,
+providing full SQL functionality including transactions, prepared statements, and
+parameter binding.
+
+=head1 FEATURES
+
+=over 4
+
+=item * HTTP-only communication with libsql servers
+
+=item * Full transaction support (BEGIN, COMMIT, ROLLBACK)
+
+=item * Prepared statements with parameter binding
+
+=item * Session management using baton tokens
+
+=item * Proper error handling with Hrana protocol responses
+
+=item * Support for all standard DBI methods
+
+=back
+
+=head1 DSN FORMAT
+
+The Data Source Name (DSN) format for DBD::libsql is:
+
+    dbi:libsql:http://hostname:port
+
+Examples:
+
+    # Local development server
+    dbi:libsql:http://localhost:8080
+    
+    # Remote libsql server
+    dbi:libsql:https://mydb.turso.io
+
+=head1 CONNECTION ATTRIBUTES
+
+Standard DBI connection attributes are supported:
+
+=over 4
+
+=item * RaiseError - Enable/disable automatic error raising
+
+=item * AutoCommit - Enable/disable automatic transaction commit
+
+=item * PrintError - Enable/disable error printing
+
+=back
+
+=head1 LIMITATIONS
+
+=over 4
+
+=item * Only HTTP-based libsql servers are supported
+
+=item * Local file databases are not supported
+
+=item * In-memory databases are not supported
+
+=back
+
+=head1 DEPENDENCIES
+
+This module requires the following Perl modules:
+
+=over 4
+
+=item * DBI
+
+=item * LWP::UserAgent
+
+=item * HTTP::Request
+
+=item * JSON
+
+=back
+
+=head1 AUTHOR
+
+ytnobody E<lt>ytnobody@gmail.comE<gt>
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=head1 SEE ALSO
+
+=over 4
+
+=item * L<DBI>
+
+=item * L<DBD::SQLite>
+
+=item * libsql documentation: L<https://docs.turso.tech/>
+
+=back
+
+=cut

@@ -1,5 +1,5 @@
 {
-   "abstract" : "DBI driver for libsql database",
+   "abstract" : "DBI driver for libsql databases",
    "author" : [
       "ytnobody <ytnobody@gmail.com>"
    ],
@@ -33,6 +33,7 @@
       },
       "develop" : {
          "requires" : {
+            "Alien::Turso::CLI" : "0.01",
             "Test::CPAN::Meta" : "0",
             "Test::MinimumVersion::Fast" : "0.04",
             "Test::PAUSE::Permissions" : "0.07",
@@ -43,7 +44,11 @@
       "runtime" : {
          "requires" : {
             "DBI" : "1.631",
-            "FFI::Platypus" : "2.00",
+            "HTTP::Request" : "6.00",
+            "IO::Socket::SSL" : "2.00",
+            "JSON" : "4.00",
+            "LWP::UserAgent" : "6.00",
+            "Protocol::WebSocket" : "0.20",
             "perl" : "5.008001"
          }
       },
