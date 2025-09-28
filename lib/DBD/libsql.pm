@@ -64,13 +64,11 @@ sub connect {
         die "Local database files are not supported by DBD::libsql HTTP-only mode. Use a libsql server URL instead.";
     }
     
-    # Add http:// prefix if not present (libsql always uses HTTP)
-    unless ($dsn =~ /^https?:\/\//) {
-        $dsn = "http://$dsn";
-    }
+    # Parse DSN to build URL
+    my $server_url = _parse_dsn_to_url($dsn);
     
     my $dbh = DBI::_new_dbh($drh, {
-        'Name' => $dsn,
+        'Name' => $server_url,
     });
     
     $dbh->STORE('Active', 1);
@@ -84,21 +82,21 @@ sub connect {
     $HTTP_CLIENTS{$dbh_id} = {
         ua => $ua,
         json => JSON->new->utf8,
-        base_url => $dsn,
+        base_url => $server_url,
         baton => undef,  # Session token for maintaining transaction state
     };
     
     $dbh->STORE('libsql_dbh_id', $dbh_id);
     
     # Test connection to libsql server
-    my $health_response = $ua->get("$dsn/health");
+    my $health_response = $ua->get("$server_url/health");
     unless ($health_response->is_success) {
-        die "Cannot connect to libsql server at $dsn: " . $health_response->status_line;
+        die "Cannot connect to libsql server at $server_url: " . $health_response->status_line;
     }
     
     # Initialize session baton with a simple query
     eval {
-        my $init_request = HTTP::Request->new('POST', "$dsn/v2/pipeline");
+        my $init_request = HTTP::Request->new('POST', "$server_url/v2/pipeline");
         $init_request->header('Content-Type' => 'application/json');
         my $init_data = {
             requests => [
@@ -122,6 +120,40 @@ sub connect {
     };
     
     return $dbh;
+}
+
+sub _parse_dsn_to_url {
+    my ($dsn) = @_;
+    
+    # If already an HTTP URL, return as-is (backward compatibility)
+    if ($dsn =~ /^https?:\/\//) {
+        return $dsn;
+    }
+    
+    # Parse new format: hostname?port=8080&ssl=false
+    my ($host, $query_string) = split /\?/, $dsn, 2;
+    
+    # Default values
+    my $port = '8080';
+    my $ssl = 'false';
+    
+    # Parse query parameters if present
+    if ($query_string) {
+        my %params = map { 
+            my ($k, $v) = split /=/, $_, 2; 
+            ($k, $v // '') 
+        } split '&', $query_string;
+        
+        $port = $params{port} if defined $params{port} && $params{port} ne '';
+        $ssl = $params{ssl} if defined $params{ssl} && $params{ssl} ne '';
+    }
+    
+    # Build URL
+    my $scheme = ($ssl eq 'true' || $ssl eq '1') ? 'https' : 'http';
+    my $url = "$scheme://$host";
+    $url .= ":$port" if $port && $port ne '80' && $port ne '443';
+    
+    return $url;
 }
 
 sub data_sources {
@@ -530,11 +562,17 @@ DBD::libsql - DBI driver for libsql databases
 
     use DBI;
     
-    # Connect to a libsql server
-    my $dbh = DBI->connect('dbi:libsql:http://localhost:8080', '', '', {
+    # Connect to a libsql server (new format)
+    my $dbh = DBI->connect('dbi:libsql:localhost?port=8080&ssl=false', '', '', {
         RaiseError => 1,
         AutoCommit => 1,
     });
+    
+    # Backward compatibility - HTTP URLs still supported
+    # my $dbh = DBI->connect('dbi:libsql:http://localhost:8080', '', '', {
+    #     RaiseError => 1,
+    #     AutoCommit => 1,
+    # });
     
     # Create a table
     $dbh->do("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
@@ -582,14 +620,18 @@ parameter binding.
 
 The Data Source Name (DSN) format for DBD::libsql is:
 
-    dbi:libsql:http://hostname:port
+    dbi:libsql:hostname?port=8080&ssl=false
 
 Examples:
 
-    # Local development server
-    dbi:libsql:http://localhost:8080
+    # Local development server (HTTP)
+    dbi:libsql:localhost?port=8080&ssl=false
     
-    # Remote libsql server
+    # Remote libsql server (HTTPS)
+    dbi:libsql:mydb.turso.io?port=443&ssl=true
+    
+    # Backward compatibility - HTTP URLs still supported
+    dbi:libsql:http://localhost:8080
     dbi:libsql:https://mydb.turso.io
 
 =head1 CONNECTION ATTRIBUTES

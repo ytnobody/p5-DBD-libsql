@@ -7,11 +7,17 @@ DBD::libsql - DBI driver for libsql databases
 
     use DBI;
     
-    # Connect to a libsql server
-    my $dbh = DBI->connect('dbi:libsql:http://localhost:8080', '', '', {
+    # Connect to a libsql server (new format)
+    my $dbh = DBI->connect('dbi:libsql:localhost?port=8080&ssl=false', '', '', {
         RaiseError => 1,
         AutoCommit => 1,
     });
+    
+    # Backward compatibility - HTTP URLs still supported
+    # my $dbh = DBI->connect('dbi:libsql:http://localhost:8080', '', '', {
+    #     RaiseError => 1,
+    #     AutoCommit => 1,
+    # });
     
     # Create a table
     $dbh->do("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
@@ -50,14 +56,18 @@ parameter binding.
 
 The Data Source Name (DSN) format for DBD::libsql is:
 
-    dbi:libsql:http://hostname:port
+    dbi:libsql:hostname?port=8080&ssl=false
 
 Examples:
 
-    # Local development server
-    dbi:libsql:http://localhost:8080
+    # Local development server (HTTP)
+    dbi:libsql:localhost?port=8080&ssl=false
     
-    # Remote libsql server
+    # Remote libsql server (HTTPS)
+    dbi:libsql:mydb.turso.io?port=443&ssl=true
+    
+    # Backward compatibility - HTTP URLs still supported
+    dbi:libsql:http://localhost:8080
     dbi:libsql:https://mydb.turso.io
 
 # CONNECTION ATTRIBUTES
