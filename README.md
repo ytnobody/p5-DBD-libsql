@@ -8,7 +8,7 @@ DBD::libsql - DBI driver for libsql databases
     use DBI;
     
     # Connect to a libsql server
-    my $dbh = DBI->connect('dbi:libsql:localhost?port=8080&ssl=false', '', '', {
+    my $dbh = DBI->connect('dbi:libsql:localhost', '', '', {
         RaiseError => 1,
         AutoCommit => 1,
     });
@@ -50,18 +50,20 @@ parameter binding.
 
 The Data Source Name (DSN) format for DBD::libsql is:
 
-    dbi:libsql:hostname?port=8080&ssl=false
+    dbi:libsql:hostname
+    dbi:libsql:hostname?schema=https&port=8443
 
 Examples:
 
-    # Local development server (HTTP)
-    dbi:libsql:localhost?port=8080&ssl=false
+    # Turso Database (auto-detected HTTPS)
+    dbi:libsql:hono-prisma-ytnobody.aws-ap-northeast-1.turso.io
     
-    # Remote libsql server (HTTPS)
-    dbi:libsql:mydb.turso.io?port=443&ssl=true
-    
-    # Default values (HTTP on port 8080)
+    # Local development server (auto-detected HTTP)
     dbi:libsql:localhost
+    
+    # Custom configuration
+    dbi:libsql:localhost?schema=http&port=3000
+    dbi:libsql:api.example.com?schema=https&port=8443
 
 # CONNECTION ATTRIBUTES
 

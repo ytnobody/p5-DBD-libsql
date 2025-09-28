@@ -127,31 +127,45 @@ sub _parse_dsn_to_url {
     
     # Reject HTTP URL format (use new format instead)
     if ($dsn =~ /^https?:\/\//) {
-        die "HTTP URL format in DSN is not supported. Use hostname?port=8080&ssl=false format instead.";
+        die "HTTP URL format in DSN is not supported. Use hostname or hostname?schema=https&port=443 format instead.";
     }
     
-    # Parse new format: hostname?port=8080&ssl=false
+    # Parse new format: hostname or hostname?schema=https&port=443
     my ($host, $query_string) = split /\?/, $dsn, 2;
     
-    # Default values
-    my $port = '8080';
-    my $ssl = 'false';
+    # Smart defaults based on hostname
+    my $scheme = 'https';  # Default to HTTPS for security
+    my $port = '443';      # Default HTTPS port
     
-    # Parse query parameters if present
+    # Detect Turso hosts (always HTTPS on 443)
+    if ($host =~ /\.turso\.io$/) {
+        $scheme = 'https';
+        $port = '443';
+    }
+    # Detect localhost/127.0.0.1 (default to HTTP for development)
+    elsif ($host =~ /^(localhost|127\.0\.0\.1)$/) {
+        $scheme = 'http';
+        $port = '8080';
+    }
+    
+    # Parse query parameters if present (override defaults)
     if ($query_string) {
         my %params = map { 
             my ($k, $v) = split /=/, $_, 2; 
             ($k, $v // '') 
         } split '&', $query_string;
         
+        $scheme = $params{schema} if defined $params{schema} && $params{schema} ne '';
         $port = $params{port} if defined $params{port} && $params{port} ne '';
-        $ssl = $params{ssl} if defined $params{ssl} && $params{ssl} ne '';
     }
     
     # Build URL
-    my $scheme = ($ssl eq 'true' || $ssl eq '1') ? 'https' : 'http';
     my $url = "$scheme://$host";
-    $url .= ":$port" if $port && $port ne '80' && $port ne '443';
+    # Only add port if it's not the default for the scheme
+    if (($scheme eq 'http' && $port ne '80') || 
+        ($scheme eq 'https' && $port ne '443')) {
+        $url .= ":$port";
+    }
     
     return $url;
 }
@@ -563,7 +577,7 @@ DBD::libsql - DBI driver for libsql databases
     use DBI;
     
     # Connect to a libsql server
-    my $dbh = DBI->connect('dbi:libsql:localhost?port=8080&ssl=false', '', '', {
+    my $dbh = DBI->connect('dbi:libsql:localhost', '', '', {
         RaiseError => 1,
         AutoCommit => 1,
     });
@@ -614,18 +628,20 @@ parameter binding.
 
 The Data Source Name (DSN) format for DBD::libsql is:
 
-    dbi:libsql:hostname?port=8080&ssl=false
+    dbi:libsql:hostname
+    dbi:libsql:hostname?schema=https&port=8443
 
 Examples:
 
-    # Local development server (HTTP)
-    dbi:libsql:localhost?port=8080&ssl=false
+    # Turso Database (auto-detected HTTPS)
+    dbi:libsql:hono-prisma-ytnobody.aws-ap-northeast-1.turso.io
     
-    # Remote libsql server (HTTPS)
-    dbi:libsql:mydb.turso.io?port=443&ssl=true
-    
-    # Default values (HTTP on port 8080)
+    # Local development server (auto-detected HTTP)
     dbi:libsql:localhost
+    
+    # Custom configuration
+    dbi:libsql:localhost?schema=http&port=3000
+    dbi:libsql:api.example.com?schema=https&port=8443
 
 =head1 CONNECTION ATTRIBUTES
 

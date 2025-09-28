@@ -110,7 +110,7 @@ subtest 'DBI Connection Test' => sub {
     plan tests => 4;
     
     # Connect using local turso dev server
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     ok($dbh, 'Successfully connected via HTTP');
     isa_ok($dbh, 'DBI::db');
     
@@ -125,7 +125,7 @@ subtest 'DBI Connection Test' => sub {
 subtest 'SQL Operations Test' => sub {
     plan tests => 6;
     
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     ok($dbh, 'Connected to database');
     
     # Test CREATE TABLE
@@ -149,7 +149,7 @@ subtest 'SQL Operations Test' => sub {
 subtest 'Data Fetching Test' => sub {
     plan tests => 6;
     
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     
     # Insert test data
     $dbh->do("DELETE FROM test_users"); # Clean slate
@@ -185,7 +185,7 @@ subtest 'Data Fetching Test' => sub {
 subtest 'Parameter Binding Test' => sub {
     plan tests => 5;
     
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     
     # Create test table
     $dbh->do("CREATE TABLE IF NOT EXISTS test_params (id INTEGER, name TEXT, score REAL)");
@@ -208,7 +208,7 @@ subtest 'Parameter Binding Test' => sub {
 subtest 'Transaction Test' => sub {
     plan tests => 5;
     
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     
     # Create test table
     $dbh->do("CREATE TABLE IF NOT EXISTS test_trans (id INTEGER PRIMARY KEY, value TEXT)");
@@ -239,7 +239,7 @@ subtest 'Transaction Test' => sub {
 subtest 'Error Handling Test' => sub {
     plan tests => 3;
     
-    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?port=8080&ssl=false", "", "");
+    my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     
     # Test invalid SQL
     my $sth = eval { $dbh->prepare("INVALID SQL STATEMENT") };

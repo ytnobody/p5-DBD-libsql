@@ -6,19 +6,29 @@ use DBI;
 # Test DSN parsing for HTTP-only libsql driver
 my @test_cases = (
     {
-        dsn => "dbi:libsql:localhost?port=8080&ssl=false",
-        expected_url => "http://localhost:8080",
-        desc => "New format - Local HTTP server"
-    },
-    {
-        dsn => "dbi:libsql:example.turso.io?port=443&ssl=true",
-        expected_url => "https://example.turso.io",
-        desc => "New format - Remote HTTPS server"
-    },
-    {
         dsn => "dbi:libsql:localhost",
         expected_url => "http://localhost:8080",
-        desc => "New format - Default values"
+        desc => "Localhost - Auto HTTP with port 8080"
+    },
+    {
+        dsn => "dbi:libsql:localhost?schema=http&port=3000",
+        expected_url => "http://localhost:3000",
+        desc => "Localhost - Custom HTTP port"
+    },
+    {
+        dsn => "dbi:libsql:hono-prisma-ytnobody.aws-ap-northeast-1.turso.io",
+        expected_url => "https://hono-prisma-ytnobody.aws-ap-northeast-1.turso.io",
+        desc => "Turso - Auto HTTPS detection"
+    },
+    {
+        dsn => "dbi:libsql:example.com?schema=https&port=8443",
+        expected_url => "https://example.com:8443",
+        desc => "Custom host - HTTPS with custom port"
+    },
+    {
+        dsn => "dbi:libsql:api.example.com",
+        expected_url => "https://api.example.com",
+        desc => "Custom host - Default HTTPS"
     }
 );
 
@@ -38,11 +48,11 @@ my @error_test_cases = (
     },
     {
         dsn => "dbi:libsql:http://localhost:8080",
-        desc => "HTTP URL format (deprecated, not supported)"
+        desc => "HTTP URL format (not supported)"
     },
     {
         dsn => "dbi:libsql:https://example.turso.io",
-        desc => "HTTPS URL format (deprecated, not supported)"
+        desc => "HTTPS URL format (not supported)"
     }
 );
 
@@ -56,29 +66,43 @@ for my $test (@test_cases) {
     my $dsn_remainder = $dsn;
     $dsn_remainder =~ s/^dbi:libsql://i;
     
-    # Simulate _parse_dsn_to_url function logic (new format only)
-    # New format: hostname?port=8080&ssl=false
+    # Simulate _parse_dsn_to_url function logic (new format)
+    # Format: hostname or hostname?schema=https&port=443
     my ($host, $query_string) = split /\?/, $dsn_remainder, 2;
     
-    # Default values
-    my $port = '8080';
-    my $ssl = 'false';
+    # Smart defaults based on hostname
+    my $scheme = 'https';  # Default to HTTPS for security
+    my $port = '443';      # Default HTTPS port
     
-    # Parse query parameters if present
+    # Detect Turso hosts (always HTTPS on 443)
+    if ($host =~ /\.turso\.io$/) {
+        $scheme = 'https';
+        $port = '443';
+    }
+    # Detect localhost/127.0.0.1 (default to HTTP for development)
+    elsif ($host =~ /^(localhost|127\.0\.0\.1)$/) {
+        $scheme = 'http';
+        $port = '8080';
+    }
+    
+    # Parse query parameters if present (override defaults)
     if ($query_string) {
         my %params = map { 
             my ($k, $v) = split /=/, $_, 2; 
             ($k, $v // '') 
-        } split '&', $query_string;
+        } split /&/, $query_string;
         
+        $scheme = $params{schema} if defined $params{schema} && $params{schema} ne '';
         $port = $params{port} if defined $params{port} && $params{port} ne '';
-        $ssl = $params{ssl} if defined $params{ssl} && $params{ssl} ne '';
     }
     
     # Build URL
-    my $scheme = ($ssl eq 'true' || $ssl eq '1') ? 'https' : 'http';
     my $parsed_url = "$scheme://$host";
-    $parsed_url .= ":$port" if $port && $port ne '80' && $port ne '443';
+    # Only add port if it's not the default for the scheme
+    if (($scheme eq 'http' && $port ne '80') || 
+        ($scheme eq 'https' && $port ne '443')) {
+        $parsed_url .= ":$port";
+    }
     
     is $parsed_url, $test->{expected_url}, $test->{desc};
 }
