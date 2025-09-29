@@ -11,7 +11,7 @@ use HTTP::Request;
 use JSON;
 use Data::Dumper;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 our $drh;
 
 # Global hash to store HTTP clients keyed by database handle reference
