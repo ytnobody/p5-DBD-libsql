@@ -657,11 +657,22 @@ sub rows {
     return $sth->{libsql_rows} || 0;
 }
 
+sub FETCH {
+    my ($sth, $attr) = @_;
+    return $sth->{$attr};
+}
+
+sub STORE {
+    my ($sth, $attr, $value) = @_;
+    $sth->{$attr} = $value;
+    return 1;
+}
+
 sub DESTROY {
     my $sth = shift;
     
     # Ensure finish is called if still active
-    if ($sth && $sth->FETCH('Active')) {
+    if ($sth && $sth->{Active}) {
         $sth->finish();
     }
 }
