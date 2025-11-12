@@ -151,6 +151,9 @@ subtest 'Data Fetching Test' => sub {
     
     my $dbh = DBI->connect("dbi:libsql:127.0.0.1?schema=http&port=8080", "", "");
     
+    # Create test table if not exists
+    $dbh->do("CREATE TABLE IF NOT EXISTS test_users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)");
+    
     # Insert test data
     $dbh->do("DELETE FROM test_users"); # Clean slate
     $dbh->do("INSERT INTO test_users (name, email) VALUES ('Bob Smith', 'bob\@example.com')");
