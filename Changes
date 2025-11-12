@@ -2,6 +2,11 @@ Revision history for Perl extension DBD-libsql
 
 {{$NEXT}}
 
+0.04 2025-11-12T12:19:00Z
+    - fix: Make fetchrow_hashref return dynamic column names from SQL (issue #4)
+    - fix: Add FETCH and STORE methods to st package
+    - test: Add integration tests for DBIx::Sunny select_row and select_all
+
 0.03 2025-09-29T08:40:30Z
     - fix: call $sth->finish() when DESTROY and $sth is active
 
