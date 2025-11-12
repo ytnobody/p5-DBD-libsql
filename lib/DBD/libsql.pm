@@ -483,6 +483,56 @@ sub DESTROY {
     }
 }
 
+# Extract column names from SQL SELECT statement
+sub _extract_column_names {
+    my ($sql) = @_;
+    
+    return () unless $sql;
+    
+    # Remove leading/trailing whitespace
+    $sql =~ s/^\s+|\s+$//g;
+    
+    # Handle SELECT statements
+    if ($sql =~ /^SELECT\s+(.+?)\s+FROM/i) {
+        my $select_part = $1;
+        
+        # Split by comma, handling spaces and aliases
+        my @columns = split /\s*,\s*/, $select_part;
+        
+        my @col_names;
+        for my $col (@columns) {
+            # Remove leading/trailing whitespace
+            $col =~ s/^\s+|\s+$//g;
+            
+            # Handle aliases: "column AS alias" or "column alias"
+            if ($col =~ /\s+(?:AS\s+)?(\w+)\s*$/i) {
+                push @col_names, $1;
+            }
+            # Handle function calls: COUNT(*), SUM(col), etc.
+            elsif ($col =~ /(\w+)\s*\(\s*\*\s*\)/i) {
+                push @col_names, "$1(*)";
+            }
+            elsif ($col =~ /(\w+)\s*\(\s*(\w+)\s*\)/i) {
+                my ($func, $arg) = ($1, $2);
+                # Use alias if specified, otherwise use function name
+                push @col_names, $func;
+            }
+            # Simple column name
+            elsif ($col =~ /(\w+)$/i) {
+                push @col_names, $1;
+            }
+            # Fallback for quoted identifiers
+            elsif ($col =~ /["`]([^"`]+)["`]/i) {
+                push @col_names, $1;
+            }
+        }
+        
+        return @col_names;
+    }
+    
+    return ();
+}
+
 package DBD::libsql::st;
 
 $DBD::libsql::st::imp_data_size = 0;
@@ -530,6 +580,10 @@ sub execute {
         $sth->{libsql_rows} = $execute_result->{affected_row_count} || 0;
     }
     
+    # Extract and store column names from SQL statement
+    my @col_names = DBD::libsql::db::_extract_column_names($statement);
+    $sth->{libsql_col_names} = \@col_names;
+    
     return 1;
 }
 
@@ -562,27 +616,18 @@ sub fetchrow_hashref {
     my $row = $sth->fetchrow_arrayref();
     return undef unless $row;
     
-    my $statement = $sth->{Statement} || '';
+    my @col_names = @{$sth->{libsql_col_names} || []};
     
-    # Column name mapping based on SQL
-    if ($statement =~ /test_fetch/i) {
-        return {
-            id => $row->[0],
-            name => $row->[1],
-            age => $row->[2],
-        };
-    } elsif ($statement =~ /COUNT\(\*\)/i) {
-        return {
-            'COUNT(*)' => $row->[0],
-        };
-    } else {
-        # Default column names
-        return {
-            id => $row->[0],
-            name => $row->[1],
-            value => $row->[2],
-        };
+    # If no column names were extracted, return empty hash to avoid hardcoded mapping
+    return {} unless @col_names;
+    
+    # Build hash from values and column names
+    my %hash;
+    for (my $i = 0; $i < @col_names && $i < @$row; $i++) {
+        $hash{$col_names[$i]} = $row->[$i];
     }
+    
+    return \%hash;
 }
 
 sub fetchrow_array {
@@ -612,11 +657,22 @@ sub rows {
     return $sth->{libsql_rows} || 0;
 }
 
+sub FETCH {
+    my ($sth, $attr) = @_;
+    return $sth->{$attr};
+}
+
+sub STORE {
+    my ($sth, $attr, $value) = @_;
+    $sth->{$attr} = $value;
+    return 1;
+}
+
 sub DESTROY {
     my $sth = shift;
     
     # Ensure finish is called if still active
-    if ($sth && $sth->FETCH('Active')) {
+    if ($sth && $sth->{Active}) {
         $sth->finish();
     }
 }
