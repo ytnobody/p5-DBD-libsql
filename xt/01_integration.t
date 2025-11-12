@@ -163,13 +163,14 @@ subtest 'Data Fetching Test' => sub {
     my $row = $sth->fetchrow_arrayref();
     ok(defined($row) && ref($row) eq 'ARRAY', 'fetchrow_arrayref returns arrayref');
     
-    # Reset statement
+    # Reset statement for hashref test
+    $sth = $dbh->prepare("SELECT * FROM test_users ORDER BY name");
     $sth->execute();
     
     # Test fetchrow_hashref
     my $hash_row = $sth->fetchrow_hashref();
     ok(defined($hash_row) && ref($hash_row) eq 'HASH', 'fetchrow_hashref returns hashref');
-    ok($hash_row->{name}, 'Hash row contains name field');
+    ok(defined($hash_row->{name}) && $hash_row->{name} ne '', 'Hash row contains name field');
     
     # Test finish
     ok($sth->finish(), 'Statement finished successfully');

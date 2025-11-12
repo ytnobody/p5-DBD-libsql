@@ -67,6 +67,11 @@ if ($@ || !$dbh) {
     plan skip_all => 'Could not connect to libsql server with DBIx::Sunny: ' . ($@ || 'unknown error');
 }
 
+# Check if select_all method exists
+unless ($dbh->can('select_all')) {
+    plan skip_all => 'DBIx::Sunny does not have select_all method';
+}
+
 plan tests => 8;
 
 # Create test table and insert data
