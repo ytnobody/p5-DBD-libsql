@@ -347,70 +347,97 @@ sub _execute_http {
     my $client_data = defined($dbh_id) ? $HTTP_CLIENTS{$dbh_id} : undef;
     return undef unless $client_data;
     
-    # Convert bind values to Hrana format
-    my @hrana_args = map {
-        if (!defined $_) {
-            { type => 'null' }
-        } else {
-            { type => 'text', value => "$_" }
-        }
-    } @bind_values;
+    # Retry logic for STREAM_EXPIRED errors
+    my $max_retries = 2;
+    my $attempt = 0;
     
-    my $pipeline_data = {
-        requests => [
-            {
-                type => 'execute',
-                stmt => {
-                    sql => $sql,
-                    args => \@hrana_args
-                }
+    while ($attempt < $max_retries) {
+        $attempt++;
+        
+        # Convert bind values to Hrana format
+        my @hrana_args = map {
+            if (!defined $_) {
+                { type => 'null' }
+            } else {
+                { type => 'text', value => "$_" }
             }
-        ]
-    };
-    
-    # Add baton if available for session continuity
-    if ($client_data->{baton}) {
-        $pipeline_data->{baton} = $client_data->{baton};
-    }
-    
-    my $request = HTTP::Request->new('POST', $client_data->{base_url} . '/v2/pipeline');
-    $request->header('Content-Type' => 'application/json');
-    
-    # Add Turso authentication header if token is available
-    if ($client_data->{auth_token}) {
-        $request->header('Authorization' => 'Bearer ' . $client_data->{auth_token});
-    }
-    
-    $request->content($client_data->{json}->encode($pipeline_data));
-    
-    my $response = $client_data->{ua}->request($request);
-    
-    if ($response->is_success) {
-        my $result = eval { $client_data->{json}->decode($response->content) };
-        if ($@ || !$result || !$result->{results}) {
-            die "Invalid response from libsql server: $@";
+        } @bind_values;
+        
+        my $pipeline_data = {
+            requests => [
+                {
+                    type => 'execute',
+                    stmt => {
+                        sql => $sql,
+                        args => \@hrana_args
+                    }
+                }
+            ]
+        };
+        
+        # Add baton if available for session continuity
+        if ($client_data->{baton}) {
+            $pipeline_data->{baton} = $client_data->{baton};
         }
         
-        # Update baton for session continuity
-        if ($result->{baton}) {
-            $client_data->{baton} = $result->{baton};
+        my $request = HTTP::Request->new('POST', $client_data->{base_url} . '/v2/pipeline');
+        $request->header('Content-Type' => 'application/json');
+        
+        # Add Turso authentication header if token is available
+        if ($client_data->{auth_token}) {
+            $request->header('Authorization' => 'Bearer ' . $client_data->{auth_token});
         }
         
-        my $first_result = $result->{results}->[0];
+        $request->content($client_data->{json}->encode($pipeline_data));
         
-        # Check if the result is an error
-        if ($first_result->{type} eq 'error') {
-            my $error = $first_result->{error};
-            die $error->{message} || "SQL execution error";
-        }
+        my $response = $client_data->{ua}->request($request);
         
-        return $first_result;
-    } else {
-        my $error_msg = "HTTP request failed: " . $response->status_line;
-        if ($response->content) {
-            $error_msg .= " - Response: " . $response->content;
+        if ($response->is_success) {
+            my $result = eval { $client_data->{json}->decode($response->content) };
+            if ($@ || !$result || !$result->{results}) {
+                die "Invalid response from libsql server: $@";
+            }
+            
+            # Update baton for session continuity
+            if ($result->{baton}) {
+                $client_data->{baton} = $result->{baton};
+            }
+            
+            my $first_result = $result->{results}->[0];
+            
+            # Check if the result is an error
+            if ($first_result->{type} eq 'error') {
+                my $error = $first_result->{error};
+                my $error_msg = $error->{message} || "SQL execution error";
+                
+                # Check for STREAM_EXPIRED error and retry if not last attempt
+                if ($error_msg =~ /STREAM_EXPIRED/ && $attempt < $max_retries) {
+                    # Clear the baton to force a new session on retry
+                    $client_data->{baton} = undef;
+                    warn "Stream expired, retrying... (attempt $attempt of $max_retries)" if $ENV{DBD_LIBSQL_DEBUG};
+                    next;
+                }
+                
+                die $error_msg;
+            }
+            
+            return $first_result;
+        } else {
+            my $error_msg = "HTTP request failed: " . $response->status_line;
+            if ($response->content) {
+                $error_msg .= " - Response: " . $response->content;
+            }
+            
+            # Check for STREAM_EXPIRED in HTTP response and retry if not last attempt
+            if ($error_msg =~ /STREAM_EXPIRED/ && $attempt < $max_retries) {
+                # Clear the baton to force a new session on retry
+                $client_data->{baton} = undef;
+                warn "Stream expired (HTTP), retrying... (attempt $attempt of $max_retries)" if $ENV{DBD_LIBSQL_DEBUG};
+                next;
+            }
+            
+            die $error_msg;
         }
-        die $error_msg;
     }
 }
 
