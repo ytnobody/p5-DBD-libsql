@@ -580,8 +580,18 @@ sub execute {
         $sth->{libsql_rows} = $execute_result->{affected_row_count} || 0;
     }
     
-    # Extract and store column names from SQL statement
-    my @col_names = DBD::libsql::db::_extract_column_names($statement);
+    # Extract and store column names
+    # Prefer column names from server response (more reliable)
+    my @col_names;
+    if ($execute_result->{cols} && @{$execute_result->{cols}}) {
+        # Server returned column metadata - extract column names from col objects
+        @col_names = map {
+            ref $_ eq 'HASH' ? ($_->{name} || $_) : $_
+        } @{$execute_result->{cols}};
+    } else {
+        # Fallback to parsing column names from SQL statement
+        @col_names = DBD::libsql::db::_extract_column_names($statement);
+    }
     $sth->{libsql_col_names} = \@col_names;
     
     return 1;
