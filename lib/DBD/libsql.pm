@@ -332,6 +332,14 @@ sub begin_work {
     return $dbh->set_err(1, "Already in a transaction");
 }
 
+sub last_insert_id {
+    my ($dbh, $catalog, $schema, $table, $field) = @_;
+    
+    # Retrieve the last insert rowid from the last statement's result
+    # The rowid is stored in the statement handle after an INSERT
+    return $dbh->{libsql_last_insert_id};
+}
+
 sub _execute_http {
     my ($dbh, $sql, @bind_values) = @_;
     
@@ -414,7 +422,14 @@ sub do {
     if ($@) {
         die $@;
     }
-    my $affected_rows = $result->{response}->{result}->{affected_row_count} || 0;
+    my $execute_result = $result->{response}->{result};
+    my $affected_rows = $execute_result->{affected_row_count} || 0;
+    
+    # Store last_insert_id from the server response
+    if (defined $execute_result->{last_insert_rowid}) {
+        $dbh->{libsql_last_insert_id} = $execute_result->{last_insert_rowid};
+    }
+    
     # Return "0E0" for zero rows to maintain truth value (DBI convention)
     return $affected_rows == 0 ? "0E0" : $affected_rows;
 }
@@ -578,6 +593,11 @@ sub execute {
         $sth->{libsql_http_rows} = [];
         $sth->{libsql_fetch_index} = 0;
         $sth->{libsql_rows} = $execute_result->{affected_row_count} || 0;
+    }
+    
+    # Store last_insert_id from the server response
+    if (defined $execute_result->{last_insert_rowid}) {
+        $dbh->{libsql_last_insert_id} = $execute_result->{last_insert_rowid};
     }
     
     # Extract and store column names from SQL statement
