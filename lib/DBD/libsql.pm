@@ -428,8 +428,18 @@ sub selectall_arrayref {
     $sth->execute(@bind_values);
     
     my @all_rows;
-    while (my $row = $sth->fetchrow_arrayref()) {
-        push @all_rows, [@$row]; # Create a copy
+    
+    # Check if Slice option is set to return array of hashes
+    if ($attr && ref $attr eq 'HASH' && exists $attr->{Slice} && ref $attr->{Slice} eq 'HASH') {
+        # { Slice => {} } - return array of hash references
+        while (my $row = $sth->fetchrow_hashref()) {
+            push @all_rows, $row if defined $row;
+        }
+    } else {
+        # Default behavior - return array of array references
+        while (my $row = $sth->fetchrow_arrayref()) {
+            push @all_rows, [@$row]; # Create a copy
+        }
     }
     
     $sth->finish();
